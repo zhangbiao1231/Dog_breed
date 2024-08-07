@@ -1,1 +1,10 @@
 .idea/
+data/*
+data/images/*
+!data/*.yaml
+!data/hyps
+!data/scripts
+!data/images
+!data/images/zidane.jpg
+!data/images/bus.jpg
+!data/*.sh
