@@ -4,6 +4,7 @@ import torchvision
 
 
 def get_net(device):
+    # device = cfg.MODEL.DEVICE
     finetune_net = nn.Sequential()
     finetune_net.features = torchvision.models.resnet34(weights = 'DEFAULT')#加载与预训练模型 weights = None
 

@@ -1,5 +1,6 @@
 from IPython import display
-import d2l
+from d2l import torch as d2l
+import matplotlib.pyplot as plt
 class Animator:
     def __init__(self, xlabel=None, ylabel=None, legend=None, xlim=None,
                  ylim=None, xscale='linear', yscale='linear',
@@ -37,3 +38,6 @@ class Animator:
         self.config_axes()
         display.display(self.fig)
         display.clear_output(wait=True)
+        plt.pause(0.1)
+        # plt.ion()
+        # plt.show(self.fig)

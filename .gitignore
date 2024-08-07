@@ -6,3 +6,4 @@ utils/*
 utils/*
 !utils/*.py
 */__pycache__/
+d2l/*

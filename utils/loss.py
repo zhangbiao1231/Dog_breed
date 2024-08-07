@@ -1,8 +1,7 @@
 # import torch
 import torch.nn as nn
 
-def loss():
-    return nn.CrossEntropyLoss(reduction="none")
+loss = nn.CrossEntropyLoss(reduction="none")
 
 def evaluate_loss(data_iter,net,device):
     l_sum , n = 0.0 , 0.0
