@@ -1,10 +1,4 @@
 .idea/
 data/*
-data/images/*
+data/datasets/*
 !data/*.yaml
-!data/hyps
-!data/scripts
-!data/images
-!data/images/zidane.jpg
-!data/images/bus.jpg
-!data/*.sh
