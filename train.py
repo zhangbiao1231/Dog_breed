@@ -65,26 +65,36 @@ def parse_opt():
     parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/train_valid_test", help="dataset path")
     parser.add_argument("--epochs", type=int, default=128, help="total training epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="total batch size")
+    parser.add_argument("--is_Full", type=bool, default=False, help="")
+
     #parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
     opt = parser.parse_args()
     return opt
 def main(opt):
     # print(opt.epochs)
-    train_iter = dataLoader(cfg, opt,
+    if not opt.is_Full:
+        train_iter = dataLoader(cfg, opt,
                             'train',
                             is_Train=True,
                             is_Test=False)
-    valid_iter = dataLoader(cfg, opt,
+        valid_iter = dataLoader(cfg, opt,
                             'valid',
                             is_Train=False,
                             is_Test=False)
+    else:
+        train_iter = dataLoader(cfg, opt,
+                                'train_valid',
+                                is_Train=True,
+                                is_Test=False)
+        valid_iter = None
     device = cfg.MODEL.DEVICE
     net = get_net(device).to(device)
+    # print(valid_iter)
 
     for X, y in train_iter:
         print(X.shape, y.shape)
         break
-    batch_size = opt.batch_size
+
     X = torch.zeros((opt.batch_size,3,224,224))
     print(net(X).shape)
 
