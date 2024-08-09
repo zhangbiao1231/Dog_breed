@@ -1,5 +1,6 @@
 .idea/
 data/*
+!data/datasets/*.csv
 !data/*.yaml
 !data/scripts/*.sh
 outputs/*
