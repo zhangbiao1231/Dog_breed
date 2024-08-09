@@ -13,6 +13,9 @@ def export_to_csv(data_dir,labels,preds,output_csv_folder):
         for i, output in zip(ids, preds):
             f.write(i.split('.')[0] + ',' + ','.join(
                 [str(num) for num in output]) + '\n')
+    print('export done.')
 #for train outputs .pt
 def save_model(model,save_path):
+    model.cpu()
     torch.save(model.state_dict(),save_path)
+    print('save done.')

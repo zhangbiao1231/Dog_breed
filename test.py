@@ -17,12 +17,16 @@ if str(ROOT) not in sys.path:
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
 def evaluation(cfg,args):
+    print(f'========== load model ==========')
     model = modelLoader.load(cfg,args)
-    # print(model)
-    # preds = model(torch.zeros((32, 3, 224, 224)))
-    # print(preds.shape)
+    # print(model.device)
+    preds = model(torch.zeros((32, 3, 224, 224)))
+    print(preds.shape)
     device = torch.device(cfg.MODEL.DEVICE)
     model.to(device)
+    print(f'========== inference configuratiton ==========')
+    print(f'load_model: {args.load_model_filename}')
+    print(f'========== inference start on {device} ==========')
     do_evaluation(cfg,args,model)
 def main():
     parser = argparse.ArgumentParser(description='ResNet Evaluation and Dog-breed-classify dataset.')

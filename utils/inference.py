@@ -25,13 +25,14 @@ def do_evaluation(cfg,args,model):
                            folder='train_valid',
                            is_Train=True)
     labels = train_valid_ds.classes
+    print(f'num of labels: {len(labels)}')
     output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     preds = inference(model, test_iter,device)
     #===================inference done=================
-    print(f'inference done \n '
-          f'export to csv...')
+    print(' ========== inference done ==========')
+    print(f'export {args.export_csv_filename}...')
     export_to_csv(data_dir=args.data_dir,
                   labels = labels,
                   preds = preds,

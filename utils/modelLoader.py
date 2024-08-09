@@ -16,8 +16,9 @@ def load(cfg,args):
     if not os.path.exists(load_folder):
         os.makedirs(load_folder)
     path = os.path.join(load_folder,args.load_model_filename)
-    clone.load_state_dict(torch.load(path))
+    clone.load_state_dict(torch.load(path,weights_only=True))
     return clone
+
 
 
 

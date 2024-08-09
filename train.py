@@ -27,9 +27,19 @@ def train(net, train_iter, valid_iter, opt,cfg):
     device = cfg.MODEL.DEVICE
     # lr, wd, lr_period, lr_decay = cfg.SOLVER.LR,cfg.SOLVER.WEIGHT_DECAY,cfg.SOLVER.LR_PERIOD,cfg.SOLVER.LR_DECAY
     lr, wd, lr_period, lr_decay = opt.lr,opt.wd,opt.lr_period,opt.lr_decay
+    momentum = cfg.SOLVER.MOMENTUM
+    print(f'========== training configuratiton ==========')
+    print(f'num_epochs: {opt.epochs} \n'
+          f'batch_size: {opt.batch_size} \n'
+          f'learning_rate: {opt.lr} \n'
+          f'weight_decay: {opt.wd} \n'
+          f'lr_period: {opt.lr_period} \n'
+          f'lr_decay: {lr_decay}')
     trainer = torch.optim.SGD((param for param in net.parameters()
-                               if param.requires_grad), lr=lr,
-                              momentum=0.9,weight_decay=wd)
+                               if param.requires_grad),
+                              lr=lr,
+                              momentum=momentum,
+                              weight_decay=wd)
     scheduler = torch.optim.lr_scheduler.StepLR(trainer, lr_period, lr_decay)
     num_batches, timer = len(train_iter), Timer()
     legend = ['train loss']
@@ -37,7 +47,8 @@ def train(net, train_iter, valid_iter, opt,cfg):
         legend.append('valid loss')
     animator = Animator(xlabel='epoch', xlim=[1, num_epochs],
                             legend=legend)
-    print('train start...')
+
+    print(f'========== train start on {device} ==========')
     # ==============start train================
     for epoch in range(num_epochs):
         metric = Accumulator(2)
@@ -56,20 +67,24 @@ def train(net, train_iter, valid_iter, opt,cfg):
                             (metric[0] / metric[1],None))
         measures = f'train loss {metric[0] / metric[1]:.3f}'
         if valid_iter is not None:
-            valid_loss = evaluate_loss(valid_iter,net,device)
-            animator.add(epoch +1,(None,valid_loss.detach().cpu()))
+            valid_loss = evaluate_loss(valid_iter, net, device)
+            print(f'epoch {epoch + 1}/{num_epochs}:\n'
+            f'train loss {metric[0] / metric[1]:.3f}, valid_loss:{valid_loss:.3f}')
+        else:
+            # animator.add(epoch +1,(None,valid_loss.detach().cpu()))
+            print(f'epoch {epoch + 1}/{num_epochs}:\n'
+            f'train loss {metric[0] / metric[1]:.3f}')
         scheduler.step()
-        print(f'epoch {epoch + 1}/{num_epochs}:'
-              f'\n train loss:{metric[0] / metric[1]:.3f},valid_loss:{valid_loss:.3f}')
     if valid_iter is not None:
         measures += f', valid loss {valid_loss:.3f}'
     print(measures + f'\n{metric[1] * num_epochs / timer.sum():.1f}'
           f' examples/sec on {str(device)}')
     # ==============train done================
-    print('train done')
+    print('========== train done ==========')
     output_folder = os.path.join(cfg.OUTPUT_DIR, "train")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
+    print(f'export {opt.export_pt_filename}...')
     save_model(model=net,
                save_path=os.path.join(output_folder, opt.export_pt_filename))
     return net
