@@ -4,6 +4,7 @@ data/datasets/*
 !data/*.yaml
 utils/*
 !utils/*.py
+!utils/config/*.py
 */__pycache__/
 outputs/*
 __pycache__/
