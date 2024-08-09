@@ -2,7 +2,7 @@
 data/*
 data/datasets/*
 !data/*.yaml
-utils/*
+#utils/*
 !utils/*.py
 !utils/config/*.py
 */__pycache__/
