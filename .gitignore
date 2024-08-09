@@ -3,7 +3,7 @@ data/*
 data/datasets/*
 !data/*.yaml
 utils/*
-utils/*
 !utils/*.py
 */__pycache__/
-d2l/*
+outputs/*
+__pycache__/
