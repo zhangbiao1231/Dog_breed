@@ -1,10 +1,6 @@
 .idea/
 data/*
-data/datasets/*
 !data/*.yaml
-#utils/*
-!utils/*.py
-!utils/config/*.py
-*/__pycache__/
+!data/scripts/*.sh
 outputs/*
 __pycache__/
