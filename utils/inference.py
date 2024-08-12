@@ -29,6 +29,7 @@ def do_evaluation(cfg,args,model):
     output_folder = os.path.join(cfg.OUTPUT_DIR, "inference")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
+
     preds = inference(model, test_iter,device)
     #===================inference done=================
     print(' ========== inference done ==========')
@@ -37,3 +38,7 @@ def do_evaluation(cfg,args,model):
                   labels = labels,
                   preds = preds,
                   output_csv_folder =os.path.join(output_folder,args.export_csv_filename))
+    export_to_csv(data_dir=args.data_dir,
+                  labels=labels,
+                  preds=preds,
+                  output_csv_folder=os.path.join(args.save_dir, args.export_csv_filename))

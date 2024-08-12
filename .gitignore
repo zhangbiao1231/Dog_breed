@@ -1,7 +1,26 @@
-.idea/
+# compilation and distribution
+__pycache__/
+*.pyc
+*.so
 data/*
-!data/datasets/*.csv
 !data/*.yaml
 !data/scripts/*.sh
 outputs/*
-__pycache__/
+
+# pytorch/python/numpy formats
+*.pth
+*.pkl
+*.npy
+
+# ipython/jupyter notebooks
+*.ipynb
+
+# Editor temporaries
+*.swn
+*.swo
+*.swp
+*~
+
+# Pycharm editor settings
+.idea
+.DS_Store

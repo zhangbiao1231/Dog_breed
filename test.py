@@ -9,6 +9,7 @@ import os
 from utils.inference import do_evaluation
 from utils.config import cfg
 from utils import modelLoader
+from utils.general import increment_path
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[0]  # YOLOv5 root directory#
@@ -38,8 +39,13 @@ def main():
     )
     parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/train_valid_test", help="dataset path")
     parser.add_argument("--export_csv_filename", type=str, default='submission.csv', help="export .csv filename")
+
+    parser.add_argument("--project", default=ROOT / "outputs/train", help="save to project/name")
+    parser.add_argument("--name", default="exp", help="save to project/name")
+    parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     args = parser.parse_args()
     # path = ROOT / ''
+    args.save_dir = str(increment_path(Path(args.project) / args.name, exist_ok=args.exist_ok))
     evaluation(cfg,args)
 
 if __name__ == '__main__':

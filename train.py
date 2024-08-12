@@ -10,7 +10,14 @@ from models.get_Net import get_net
 from utils.config import cfg
 from utils.dataloaders import dataLoader
 from utils.plots import *
-from utils.general import Accumulator
+from utils.general import (
+    LOGGER,
+    VERBOSE,
+    TQDM_BAR_FORMAT,
+    increment_path,
+    Accumulator,
+    colorstr,
+)
 from utils.loss import *
 from utils.Time import Timer
 from utils.auto_save import save_model
@@ -47,8 +54,17 @@ def train(net, train_iter, valid_iter, opt,cfg):
         legend.append('valid loss')
     animator = Animator(xlabel='epoch', xlim=[1, num_epochs],
                             legend=legend)
-
-    print(f'========== train start on {device} ==========')
+    for X,y in train_iter:
+        print(X.shape[0])
+        break
+    imgsz = X.shape[-1]
+    LOGGER.info(
+        f'Image sizes {imgsz} train, {imgsz} val\n'
+        # f'Using {train_loader.num_workers * WORLD_SIZE} dataloader workers\n'
+        f"Logging results to {colorstr('green', opt.save_dir)}\n"
+        f'Starting training for {num_epochs} epochs...'
+        f'Train on {device}'
+    )
     # ==============start train================
     for epoch in range(num_epochs):
         metric = Accumulator(2)
@@ -81,16 +97,20 @@ def train(net, train_iter, valid_iter, opt,cfg):
           f' examples/sec on {str(device)}')
     # ==============train done================
     print('========== train done ==========')
+
     output_folder = os.path.join(cfg.OUTPUT_DIR, "train")
     if not os.path.exists(output_folder):
         os.makedirs(output_folder)
     print(f'export {opt.export_pt_filename}...')
     save_model(model=net,
                save_path=os.path.join(output_folder, opt.export_pt_filename))
+    save_model(model=net,
+               save_path=os.path.join(opt.save_dir, opt.export_pt_filename))
     return net
 def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/train_valid_test", help="dataset path")
+    parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
     parser.add_argument("--epochs", type=int, default=128, help="total training epochs")
     parser.add_argument("--batch_size", type=int, default=32, help="total batch size")
     parser.add_argument("--is_Full", type=bool, default=False, help="")
@@ -99,6 +119,10 @@ def parse_opt():
     parser.add_argument("--lr_period", type=int, default=2, help="")
     parser.add_argument("--lr_decay", type=float, default=0.9, help="")
     parser.add_argument("--export_pt_filename", type=str, default='resnet34.pt', help="export .pt filename")
+
+    parser.add_argument("--project", default=ROOT / "outputs/train", help="save to project/name")
+    parser.add_argument("--name", default="exp", help="save to project/name")
+    parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
 
     #parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
     opt = parser.parse_args()
@@ -137,6 +161,8 @@ def main(opt):
 
     X = torch.zeros((opt.batch_size,3,224,224)).to(device)
     print(net(X).shape)
+
+    opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
 
     net = train(net, train_iter, valid_iter, opt,cfg)
     return net
