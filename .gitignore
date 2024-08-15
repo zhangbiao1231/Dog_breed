@@ -2,7 +2,7 @@
 __pycache__/
 *.pyc
 *.so
-data/*
+data/datasets/*
 !data/*.yaml
 !data/scripts/*.sh
 runs/*
