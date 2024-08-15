@@ -9,7 +9,6 @@ outputs/*
 
 # pytorch/python/numpy formats
 *.pth
-*.pkl
 *.npy
 
 # ipython/jupyter notebooks
