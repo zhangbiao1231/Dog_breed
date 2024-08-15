@@ -35,3 +35,8 @@ def classify_augmentations(
     T += [torchvision.transforms.ToTensor(),
           torchvision.transforms.Normalize(mean=mean, std=std)]  # Normalize and convert to Tensor
     return torchvision.transforms.Compose(T)
+def denormalize(x, mean=IMAGENET_MEAN, std=IMAGENET_STD):
+    """Reverses ImageNet normalization for BCHW format RGB images by applying `x = x * std + mean`."""
+    for i in range(3):
+        x[:, i] = x[:, i] * std[i] + mean[i]
+    return x

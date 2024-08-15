@@ -1,12 +1,6 @@
-import torch
+# dog-breed 🐶, 1.0.0 license
+"""General utils."""
 
-import os
-from pathlib import Path
-
-import logging
-import logging.config
-import yaml
-import subprocess
 import contextlib
 import glob
 import inspect
@@ -31,18 +25,50 @@ from subprocess import check_output
 from tarfile import is_tarfile
 from typing import Optional
 from zipfile import ZipFile, is_zipfile
-from utils.downloads import curl_download
+
+import cv2
 import numpy as np
+import pandas as pd
+import torch
+import torchvision
+import yaml
+
+# Import 'ultralytics' package or install if missing
+try:
+    import ultralytics
+
+    assert hasattr(ultralytics, "__version__")  # verify package is not directory
+except (ImportError, AssertionError):
+    os.system("pip install -U ultralytics")
+    import ultralytics
+
+from ultralytics.utils.checks import check_requirements
+
+from utils import TryExcept
+from utils.downloads import curl_download
+# from utils.metrics import fitness
 
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[1]  # YOLOv5 root directory
+ROOT = FILE.parents[1]  # root directory
 RANK = int(os.getenv("RANK", -1))
 
 # Settings
+NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLOv5 multiprocessing threads
+DATASETS_DIR = Path(os.getenv("DATASETS_DIR", ROOT.parent / "datasets"))  # global datasets directory
+AUTOINSTALL = str(os.getenv("YOLOv5_AUTOINSTALL", True)).lower() == "true"  # global auto-install mode
 VERBOSE = str(os.getenv("dog-greed_VERBOSE", True)).lower() == "true"  # global verbose mode
 TQDM_BAR_FORMAT = "{l_bar}{bar:10}{r_bar}"  # tqdm bar format
-DATASETS_DIR = ""
-WorkingDirectory = ""
+FONT = "Arial.ttf"  # https://github.com/ultralytics/assets/releases/download/v0.0.0/Arial.ttf
+
+torch.set_printoptions(linewidth=320, precision=5, profile="long")
+np.set_printoptions(linewidth=320, formatter={"float_kind": "{:11.5g}".format})  # format short g, %precision=5
+pd.options.display.max_columns = 10
+cv2.setNumThreads(0)  # prevent OpenCV from multithreading (incompatible with PyTorch DataLoader)
+os.environ["NUMEXPR_MAX_THREADS"] = str(NUM_THREADS)  # NumExpr max threads
+os.environ["OMP_NUM_THREADS"] = "1" if platform.system() == "darwin" else str(NUM_THREADS)  # OpenMP (PyTorch and SciPy)
+os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # suppress verbose TF compiler warnings in Colab
+os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"  # suppress "NNPACK.cpp could not initialize NNPACK" warnings
+os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output when computing FLOPs
 
 LOGGING_NAME = "dog-breed"
 
@@ -136,6 +162,21 @@ def increment_path(path, exist_ok=False, sep="", mkdir=False):
 #TODO 需要修改
 def check_requirements():
     return None
+
+class WorkingDirectory(contextlib.ContextDecorator):
+    # Usage: @WorkingDirectory(dir) decorator or 'with WorkingDirectory(dir):' context manager
+    def __init__(self, new_dir):
+        """Initializes a context manager/decorator to temporarily change the working directory."""
+        self.dir = new_dir  # new dir
+        self.cwd = Path.cwd().resolve()  # current dir
+
+    def __enter__(self):
+        """Temporarily changes the working directory within a 'with' statement context."""
+        os.chdir(self.dir)
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        """Restores the original working directory upon exiting a 'with' statement context."""
+        os.chdir(self.cwd)
 def print_args(args: Optional[dict] = None, show_file=True, show_func=False):
     """Logs the arguments of the calling function, with options to include the filename and function name."""
     x = inspect.currentframe().f_back  # previous frame
@@ -168,6 +209,75 @@ def init_seeds(seed=0, deterministic=False):
         torch.backends.cudnn.deterministic = True
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
         os.environ["PYTHONHASHSEED"] = str(seed)
+def file_date(path=__file__):
+    """Returns a human-readable file modification date in 'YYYY-M-D' format, given a file path."""
+    t = datetime.fromtimestamp(Path(path).stat().st_mtime)
+    return f"{t.year}-{t.month}-{t.day}"
+
+def check_dataset(data, autodownload=True):
+    """Validates and/or auto-downloads a dataset, returning its configuration as a dictionary."""
+
+    # Download (optional)
+    extract_dir = ""
+    if isinstance(data, (str, Path)) and (is_zipfile(data) or is_tarfile(data)):
+        download(data, dir=f"{DATASETS_DIR}/{Path(data).stem}", unzip=True, delete=False, curl=False, threads=1)
+        data = next((DATASETS_DIR / Path(data).stem).rglob("*.yaml"))
+        extract_dir, autodownload = data.parent, False
+
+    # Read yaml (optional)
+    if isinstance(data, (str, Path)):
+        data = yaml_load(data)  # dictionary
+
+    # Checks
+    for k in "train", "val", "names":
+        assert k in data, str(f"data.yaml '{k}:' field missing ❌")
+    if isinstance(data["names"], (list, tuple)):  # old array format
+        data["names"] = dict(enumerate(data["names"]))  # convert to dict
+    assert all(isinstance(k, int) for k in data["names"].keys()), "data.yaml names keys must be integers, i.e. 2: car"
+    data["nc"] = len(data["names"])
+
+    # Resolve paths
+    path = Path(extract_dir or data.get("path") or "")  # optional 'path' default to '.'
+    if not path.is_absolute():
+        path = (ROOT / path).resolve()
+        data["path"] = path  # download scripts
+    for k in "train", "val", "test":
+        if data.get(k):  # prepend path
+            if isinstance(data[k], str):
+                x = (path / data[k]).resolve()
+                if not x.exists() and data[k].startswith("../"):
+                    x = (path / data[k][3:]).resolve()
+                data[k] = str(x)
+            else:
+                data[k] = [str((path / x).resolve()) for x in data[k]]
+
+    # Parse yaml
+    train, val, test, s = (data.get(x) for x in ("train", "val", "test", "download"))
+    if val:
+        val = [Path(x).resolve() for x in (val if isinstance(val, list) else [val])]  # val path
+        if not all(x.exists() for x in val):
+            LOGGER.info("\nDataset not found ⚠️, missing paths %s" % [str(x) for x in val if not x.exists()])
+            if not s or not autodownload:
+                raise Exception("Dataset not found ❌")
+            t = time.time()
+            if s.startswith("http") and s.endswith(".zip"):  # URL
+                f = Path(s).name  # filename
+                LOGGER.info(f"Downloading {s} to {f}...")
+                torch.hub.download_url_to_file(s, f)
+                Path(DATASETS_DIR).mkdir(parents=True, exist_ok=True)  # create root
+                unzip_file(f, path=DATASETS_DIR)  # unzip
+                Path(f).unlink()  # remove zip
+                r = None  # success
+            elif s.startswith("bash "):  # bash script
+                LOGGER.info(f"Running {s} ...")
+                r = subprocess.run(s, shell=True)
+            else:  # python script
+                r = exec(s, {"yaml": data})  # return None
+            dt = f"({round(time.time() - t, 1)}s)"
+            s = f"success ✅ {dt}, saved to {colorstr('bold', DATASETS_DIR)}" if r in (0, None) else f"failure {dt} ❌"
+            LOGGER.info(f"Dataset download {s}")
+    check_font("Arial.ttf" if is_ascii(data["names"]) else "Arial.Unicode.ttf", progress=True)  # download fonts
+    return data  # dictionary
 def yaml_load(file="data.yaml"):
     """Safely loads and returns the contents of a YAML file specified by `file` argument."""
     with open(file, errors="ignore") as f:

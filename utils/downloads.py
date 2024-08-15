@@ -34,6 +34,8 @@ def curl_download(url, filename, *, silent: bool = False) -> bool:
         ]
     )
     return proc.returncode == 0
+
+
 def download(name, cache_dir=os.path.join(ROOT / 'data')):  #@save
     assert name in DATA_HUB, f"{name} 不存在于 {DATA_HUB}"
     url, sha1_hash = DATA_HUB[name]

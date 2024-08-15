@@ -1,4 +1,4 @@
-# dog-greed 🐶, 1.0.0 license
+# dog-breed 🐶, 1.0.0 license
 """
 Train a dog-greed classifier model on a classification dataset.
 
@@ -52,18 +52,84 @@ from utils.general import (
 from utils.loggers import GenericLogger
 from utils.plots import imshow_cls
 from utils.torch_utils import (
-    ModelEMA,
-    de_parallel,
     model_info,
     reshape_classifier_output,
     select_device,
-    smart_DDP,
     smart_optimizer,
     smartCrossEntropyLoss,
     torch_distributed_zero_first,
 )
 
-def train(net, train_iter, valid_iter, opt,cfg):
+LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable/elastic/run.html
+RANK = int(os.getenv("RANK", -1))
+WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
+
+def train(opt,device):
+    """Trains a dog-greed classify model, managing datasets, model optimization, logging, and saving checkpoints."""
+    init_seeds(opt.seed + 1 + RANK, deterministic=True)
+    save_dir,data,bs,epochs,nw,imgsz,pretrained = (
+        opt.save_dir,
+        Path(opt.data),
+        opt.batch_size,
+        opt.epochs,
+        min(os.cpu_count() - 1, opt.workers),
+        opt.imgsz,
+        str(opt.pretrained).lower() == "true",
+    )
+    cuda = device.type != "cpu"
+
+    # Directories
+    wdir = save_dir / "weights"
+    wdir.mkdir(parents=True, exist_ok=True)  # make dir
+    last, best = wdir / "last.pt", wdir / "best.pt"
+
+    # Save run settings
+    yaml_save(save_dir / "opt.yaml", vars(opt))
+
+    # Logger
+    logger = GenericLogger(opt=opt, console_logger=LOGGER) if RANK in {-1, 0} else None
+
+    # Download Dataset
+    with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
+        data_dir = data if data.is_dir() else (DATASETS_DIR/data)
+        if not data_dir.is_dir():
+            LOGGER.info(f"\nDataset not found ⚠️, missing path {data_dir}, attempting download...")
+            t = time.time()
+            if str(data) == "kaggle_dog_tiny":
+                subprocess.run(args=["bash",str(ROOT / "data/scripts/get_tinydog.sh")], shell=True,check=True)
+                #TODO reorg 数据集
+            else:
+                url = f"http://d2l-data.s3-accelerate.amazonaws.com/{data}.zip"
+                download(url, dir=data_dir.parent)
+            s = f"Dataset download success ✅ ({time.time() - t:.1f}s), saved to {colorstr('bold', data_dir)}\n"
+            LOGGER.info(s)
+
+    # Dataloaders
+    nc = len([x for x in (data_dir / "train").glob("*") if x.is_dir()])  # number of classes
+    trainloader = create_classification_dataloader(
+        path=data_dir / "train",
+        imgsz=imgsz,
+        batch_size=bs // WORLD_SIZE,
+        augment=True,
+        cache=opt.cache,
+        rank=LOCAL_RANK,
+        workers=nw,
+    )
+
+    test_dir = data_dir / "test" if (data_dir / "test").exists() else data_dir / "valid"  # data/test or data/val
+    if RANK in {-1, 0}:
+        testloader = create_classification_dataloader(
+            path=test_dir,
+            imgsz=imgsz,
+            batch_size=bs // WORLD_SIZE * 2,
+            augment=False,
+            cache=opt.cache,
+            rank=-1,
+            workers=nw,
+        )
+
+
+
     loss = nn.CrossEntropyLoss(reduction = "none")
     num_epochs = opt.epochs
     device = cfg.MODEL.DEVICE
@@ -142,65 +208,57 @@ def train(net, train_iter, valid_iter, opt,cfg):
     save_model(model=net,
                save_path=os.path.join(opt.save_dir, opt.export_pt_filename))
     return net
-def parse_opt():
+def parse_opt(known=False):
+    """Parses command line arguments for YOLOv5 training including model path, dataset, epochs, and more, returning
+    parsed arguments.
+    """
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/train_valid_test", help="dataset path")
+    parser.add_argument("--model", type=str, default="yolov5s-cls.pt", help="initial weights path")
+    parser.add_argument("--data", type=str, default="kaggle_dog_tiny", help="kaggle_cifar10_tiny, banana-detection, VOCtrainval_11-May-2012, , ...")
+    parser.add_argument("--epochs", type=int, default=10, help="total training epochs")
+    parser.add_argument("--batch-size", type=int, default=64, help="total batch size for all GPUs")
+    parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="train, val image size (pixels)")
+    parser.add_argument("--nosave", action="store_true", help="only save final checkpoint")
+    parser.add_argument("--cache", type=str, nargs="?", const="ram", help='--cache images in "ram" (default) or "disk"')
     parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
-    parser.add_argument("--epochs", type=int, default=128, help="total training epochs")
-    parser.add_argument("--batch_size", type=int, default=32, help="total batch size")
-    parser.add_argument("--is_Full", type=bool, default=False, help="")
-    parser.add_argument("--lr", type=float, default=1e-4, help="")
-    parser.add_argument("--wd", type=float, default=1e-4, help="")
-    parser.add_argument("--lr_period", type=int, default=2, help="")
-    parser.add_argument("--lr_decay", type=float, default=0.9, help="")
-    parser.add_argument("--export_pt_filename", type=str, default='resnet34.pt', help="export .pt filename")
-
-    parser.add_argument("--project", default=ROOT / "outputs/train", help="save to project/name")
+    parser.add_argument("--workers", type=int, default=8, help="max dataloader workers (per RANK in DDP mode)")
+    parser.add_argument("--project", default=ROOT / "runs/train-cls", help="save to project/name")
     parser.add_argument("--name", default="exp", help="save to project/name")
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
+    parser.add_argument("--pretrained", nargs="?", const=True, default=True, help="start from i.e. --pretrained False")
+    parser.add_argument("--optimizer", choices=["SGD", "Adam", "AdamW", "RMSProp"], default="Adam", help="optimizer")
+    parser.add_argument("--lr0", type=float, default=0.001, help="initial learning rate")
+    parser.add_argument("--decay", type=float, default=5e-5, help="weight decay")
+    parser.add_argument("--label-smoothing", type=float, default=0.1, help="Label smoothing epsilon")
+    parser.add_argument("--cutoff", type=int, default=None, help="Model layer cutoff index for Classify() head")
+    parser.add_argument("--dropout", type=float, default=None, help="Dropout (fraction)")
+    parser.add_argument("--verbose", action="store_true", help="Verbose mode")
+    parser.add_argument("--seed", type=int, default=0, help="Global training seed")
+    parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    return parser.parse_known_args()[0] if known else parser.parse_args()
 
-    #parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
-    opt = parser.parse_args()
-    return opt
 def main(opt):
-    # print(opt.epochs)
+    """Executes YOLOv5 training with given options, handling device setup and DDP mode; includes pre-training checks."""
+    if RANK in {-1, 0}:
+        print_args(vars(opt))
+        check_requirements(ROOT / "requirements.txt")
+    device = select_device(opt.device, batch_size=opt.batch_size)
+    # Parameters
+    opt.save_dir = increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok)  # increment run
 
-    if not opt.is_Full:
-        train_iter = dataLoader(cfg=cfg,
-                                data_dir=opt.data_dir,
-                                batch_size=opt.batch_size,
-                                folder= 'train',
-                                is_Train=True,
-                                is_Test=False)
-        valid_iter = dataLoader(cfg=cfg,
-                                data_dir=opt.data_dir,
-                                batch_size=opt.batch_size,
-                                folder= 'valid',
-                                is_Train=False,
-                                is_Test=False)
-    else:
-        train_iter = dataLoader(cfg=cfg,
-                                data_dir=opt.data_dir,
-                                batch_size=opt.batch_size,
-                                folder='train_valid',
-                                is_Train=True,
-                                is_Test=False)
-        valid_iter = None
-    device = cfg.MODEL.DEVICE
-    net = get_net(cfg).to(device)
-    # print(valid_iter)
+    # Train
+    train(opt, device)
+def run(**kwargs):
+    """
+    Executes YOLOv5 model training or inference with specified parameters, returning updated options.
 
-    for X, y in train_iter:
-        print(X.shape, y.shape)
-        break
-
-    X = torch.zeros((opt.batch_size,3,224,224)).to(device)
-    print(net(X).shape)
-
-    opt.save_dir = str(increment_path(Path(opt.project) / opt.name, exist_ok=opt.exist_ok))
-
-    net = train(net, train_iter, valid_iter, opt,cfg)
-    return net
+    Example: from yolov5 import classify; classify.train.run(data=mnist, imgsz=320, model='yolov5m')
+    """
+    opt = parse_opt(True)
+    for k, v in kwargs.items():
+        setattr(opt, k, v)
+    main(opt)
+    return opt
 
 if __name__ == '__main__':
     opt = parse_opt()
