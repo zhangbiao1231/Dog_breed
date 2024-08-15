@@ -1,32 +1,67 @@
-import os
-import logging
+# dog-greed 🐶, 1.0.0 license
+"""
+Train a dog-greed classifier model on a classification dataset.
 
-import sys
-from pathlib import Path
+Usage - Single-GPU training:
+    $ python classify/train.py --model yolov5s-cls.pt --data imagenette160 --epochs 5 --img 224
+
+Datasets:           --data , tiny-dog, cifar10, or 'path/to/data'
+dong-greed-cls models:  --model resnet34-cls.pt
+Torchvision models: --model resnet34, vgg19, etc. See https://pytorch.org/vision/stable/models.html
+"""
 import argparse
-import torch
+import os
+import subprocess
+import sys
+import time
+from copy import deepcopy
+from datetime import datetime
+from pathlib import Path
 
-from models.get_Net import get_net
-from utils.config import cfg
-from utils.dataloaders import dataLoader
-from utils.plots import *
-from utils.general import (
-    LOGGER,
-    VERBOSE,
-    TQDM_BAR_FORMAT,
-    increment_path,
-    Accumulator,
-    colorstr,
-)
-from utils.loss import *
-from utils.Time import Timer
-from utils.auto_save import save_model
+import torch
+import torch.distributed as dist
+import torch.hub as hub
+import torch.optim.lr_scheduler as lr_scheduler
+import torchvision
+from torch.cuda import amp
+from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
-ROOT = FILE.parents[0]  # YOLOv5 root directory#
+ROOT = FILE.parents[0]  # dog-greed root directory#
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
+
+import val as validate
+from models.experimental import attempt_load
+from models.yolo import ClassificationModel, DetectionModel
+from utils.dataloaders import create_classification_dataloader
+from utils.general import (
+    DATASETS_DIR,
+    LOGGER,
+    TQDM_BAR_FORMAT,
+    WorkingDirectory,
+    check_requirements,
+    colorstr,
+    download,
+    increment_path,
+    init_seeds,
+    print_args,
+    yaml_save,
+)
+from utils.loggers import GenericLogger
+from utils.plots import imshow_cls
+from utils.torch_utils import (
+    ModelEMA,
+    de_parallel,
+    model_info,
+    reshape_classifier_output,
+    select_device,
+    smart_DDP,
+    smart_optimizer,
+    smartCrossEntropyLoss,
+    torch_distributed_zero_first,
+)
 
 def train(net, train_iter, valid_iter, opt,cfg):
     loss = nn.CrossEntropyLoss(reduction = "none")

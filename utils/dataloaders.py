@@ -4,6 +4,10 @@ import torchvision
 
 from utils.augmentations import classify_augmentations
 
+#TODO 需要修改
+class create_classification_dataloader():
+    def __init__(self):
+        self.a = None
 def make_dataSets(cfg,data_dir,folder,is_Train = True):
     augment = is_Train
     augs = classify_augmentations(augment,cfg)
