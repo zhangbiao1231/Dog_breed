@@ -3,8 +3,6 @@ __pycache__/
 *.pyc
 *.so
 data/datasets/*
-!data/*.yaml
-!data/scripts/*.sh
 runs/*
 
 # pytorch/python/numpy formats
