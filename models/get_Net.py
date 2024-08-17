@@ -13,9 +13,6 @@ def get_net(cfg):
     finetune_net.output_new = nn.Sequential(nn.Linear(1000,256),
                                            nn.ReLU(),
                                            nn.Linear(256,120))
-    finetune_net.output_new = nn.Sequential(nn.Linear(1000,256),
-                                           nn.ReLU(),
-                                           nn.Linear(256,120))
     # finetune_net = finetune_net.to(device)
     for param in finetune_net.features.parameters():
         param.requires_grad = False

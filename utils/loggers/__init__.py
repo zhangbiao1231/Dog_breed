@@ -8,7 +8,7 @@ from pathlib import Path
 
 import torch
 
-from utils.general import LOGGER, colorstr
+from utils.general import LOGGER, colorstr,cv2
 
 # from utils.loggers.clearml.clearml_utils import ClearmlLogger
 # from utils.loggers.wandb.wandb_utils import WandbLogger
@@ -17,6 +17,7 @@ from utils.general import LOGGER, colorstr
 
 LOGGERS = ("csv", "tb", "wandb", "clearml", "comet")  # *.csv, TensorBoard, Weights & Biases, ClearML
 RANK = int(os.getenv("RANK", -1))
+
 
 try:
     from torch.utils.tensorboard import SummaryWriter
@@ -78,7 +79,7 @@ class Loggers:
         s = self.save_dir
         if "tb" in self.include:
             prefix = colorstr("TensorBoard: ")
-            self.logger.info(f"{prefix}Start with 'tensorboard --logdir {s.parent}', view at http://localhost:6006/")
+            self.logger.info(f"{prefix}Start with 'tensorboard --logdir {s.parent}', view at http://localhost:6006/")#TODO 链接失败，需要处理
             self.tb = SummaryWriter(str(s))
 
     def remote_dataset(self):
@@ -287,6 +288,13 @@ class GenericLogger:
         if metadata is None:
             metadata = {}
         # Log model to all loggers
+        if self.wandb:
+            art = wandb.Artifact(name=f"run_{wandb.run.id}_model", type="model", metadata=metadata)
+            art.add_file(str(model_path))
+            wandb.log_artifact(art)
+        if self.clearml:
+            self.clearml.log_model(model_path=model_path, model_name=model_path.stem)
+
 
     def update_params(self, params):
         """Updates logged parameters in WandB and/or ClearML if enabled."""

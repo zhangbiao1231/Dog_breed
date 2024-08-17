@@ -51,7 +51,7 @@ def reorg_dog_data(data_dir, valid_ratio):
     reorg_test(data_dir)
 def parse_opt():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/kaggle_dog_tiny", help="dataset path")
+    parser.add_argument("--data_dir", type=str, default=ROOT / "data/datasets/dog-breed-identification", help="dataset path")
     parser.add_argument("--valid_ratio", type=float, default=0.1)
     #parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=640, help="train, val image size (pixels)")
     opt = parser.parse_args()

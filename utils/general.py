@@ -25,6 +25,7 @@ from subprocess import check_output
 from tarfile import is_tarfile
 from typing import Optional
 from zipfile import ZipFile, is_zipfile
+import pkg_resources as pkg
 
 import cv2
 import numpy as np
@@ -54,9 +55,9 @@ RANK = int(os.getenv("RANK", -1))
 
 # Settings
 NUM_THREADS = min(8, max(1, os.cpu_count() - 1))  # number of YOLOv5 multiprocessing threads
-DATASETS_DIR = Path(os.getenv("DATASETS_DIR", ROOT.parent / "datasets"))  # global datasets directory
-AUTOINSTALL = str(os.getenv("YOLOv5_AUTOINSTALL", True)).lower() == "true"  # global auto-install mode
-VERBOSE = str(os.getenv("dog-greed_VERBOSE", True)).lower() == "true"  # global verbose mode
+DATASETS_DIR = Path(os.getenv("dog-breed_DATASETS_DIR", ROOT / "data/datasets"))  # global datasets directory
+AUTOINSTALL = str(os.getenv("dog-breed_AUTOINSTALL", True)).lower() == "true"  # global auto-install mode
+VERBOSE = str(os.getenv("dog-breed_VERBOSE", True)).lower() == "true"  # global verbose mode
 TQDM_BAR_FORMAT = "{l_bar}{bar:10}{r_bar}"  # tqdm bar format
 FONT = "Arial.ttf"  # https://github.com/ultralytics/assets/releases/download/v0.0.0/Arial.ttf
 
@@ -69,8 +70,9 @@ os.environ["OMP_NUM_THREADS"] = "1" if platform.system() == "darwin" else str(NU
 os.environ["TF_CPP_MIN_LOG_LEVEL"] = "2"  # suppress verbose TF compiler warnings in Colab
 os.environ["TORCH_CPP_LOG_LEVEL"] = "ERROR"  # suppress "NNPACK.cpp could not initialize NNPACK" warnings
 os.environ["KINETO_LOG_LEVEL"] = "5"  # suppress verbose PyTorch profiler output when computing FLOPs
+os.environ["TENSORBOARD_PROXY_URL"]= os.environ["NB_PREFIX"]+"/proxy/6006/"
 
-LOGGING_NAME = "dog-breed"
+LOGGING_NAME = "dog-breed 🐶"
 
 def set_logging(name=LOGGING_NAME, verbose=True):
     """Configures logging with specified verbosity; `name` sets the logger's name, `verbose` controls logging level."""
@@ -159,7 +161,7 @@ def increment_path(path, exist_ok=False, sep="", mkdir=False):
     if mkdir:
         path.mkdir(parents=True, exist_ok=True)  # make directory
     return path
-#TODO 需要修改
+
 def check_requirements():
     return None
 
@@ -191,7 +193,7 @@ def print_args(args: Optional[dict] = None, show_file=True, show_func=False):
     s = (f"{file}: " if show_file else "") + (f"{func}: " if show_func else "")
     LOGGER.info(colorstr(s) + ", ".join(f"{k}={v}" for k, v in args.items()))
 
-#TODO 需要修改
+
 def init_seeds(seed=0, deterministic=False):
     """
     Initializes RNG seeds and sets deterministic options if specified.
@@ -204,7 +206,7 @@ def init_seeds(seed=0, deterministic=False):
     torch.cuda.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)  # for Multi-GPU, exception safe
     # torch.backends.cudnn.benchmark = True  # AutoBatch problem https://github.com/ultralytics/yolov5/issues/9287
-    if deterministic and check_version(torch.__version__, "1.12.0"):  # https://github.com/ultralytics/yolov5/pull/8213
+    if deterministic :  # https://github.com/ultralytics/yolov5/pull/8213
         torch.use_deterministic_algorithms(True)
         torch.backends.cudnn.deterministic = True
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
@@ -213,7 +215,7 @@ def file_date(path=__file__):
     """Returns a human-readable file modification date in 'YYYY-M-D' format, given a file path."""
     t = datetime.fromtimestamp(Path(path).stat().st_mtime)
     return f"{t.year}-{t.month}-{t.day}"
-
+    return result
 def check_dataset(data, autodownload=True):
     """Validates and/or auto-downloads a dataset, returning its configuration as a dictionary."""
 
@@ -278,6 +280,39 @@ def check_dataset(data, autodownload=True):
             LOGGER.info(f"Dataset download {s}")
     check_font("Arial.ttf" if is_ascii(data["names"]) else "Arial.Unicode.ttf", progress=True)  # download fonts
     return data  # dictionary
+def check_version(current="0.0.0", minimum="0.0.0", name="version ", pinned=False, hard=False, verbose=False):
+    """Checks if the current version meets the minimum required version, exits or warns based on parameters."""
+    current, minimum = (pkg.parse_version(x) for x in (current, minimum))
+    result = (current == minimum) if pinned else (current >= minimum)  # bool
+    s = f"WARNING ⚠️ {name}{minimum} is required by YOLOv5, but {name}{current} is currently installed"  # string
+    if hard:
+        assert result, emojis(s)  # assert min requirements met
+    if verbose and not result:
+        LOGGER.warning(s)
+    return result
+class Profile(contextlib.ContextDecorator):
+    # YOLOv5 Profile class. Usage: @Profile() decorator or 'with Profile():' context manager
+    def __init__(self, t=0.0, device: torch.device = None):
+        """Initializes a profiling context for YOLOv5 with optional timing threshold and device specification."""
+        self.t = t
+        self.device = device
+        self.cuda = bool(device and str(device).startswith("cuda"))
+
+    def __enter__(self):
+        """Initializes timing at the start of a profiling context block for performance measurement."""
+        self.start = self.time()
+        return self
+
+    def __exit__(self, type, value, traceback):
+        """Concludes timing, updating duration for profiling upon exiting a context block."""
+        self.dt = self.time() - self.start  # delta-time
+        self.t += self.dt  # accumulate dt
+
+    def time(self):
+        """Measures and returns the current time, synchronizing CUDA operations if `cuda` is True."""
+        if self.cuda:
+            torch.cuda.synchronize(self.device)
+        return time.time()
 def yaml_load(file="data.yaml"):
     """Safely loads and returns the contents of a YAML file specified by `file` argument."""
     with open(file, errors="ignore") as f:

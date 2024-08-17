@@ -25,16 +25,17 @@ import yaml
 from PIL import ExifTags, Image, ImageOps
 from torch.utils.data import DataLoader, Dataset, dataloader, distributed
 from tqdm import tqdm
+import cv2
 
 from utils.augmentations import (
-    Albumentations,
-    augment_hsv,
+    # Albumentations,
+    # augment_hsv,
     classify_albumentations,
     classify_transforms,
-    copy_paste,
-    letterbox,
-    mixup,
-    random_perspective,
+    # copy_paste,
+    # letterbox,
+    # mixup,
+    # random_perspective,
 )
 from utils.general import (
     DATASETS_DIR,
@@ -43,10 +44,10 @@ from utils.general import (
     TQDM_BAR_FORMAT,
     check_dataset,
     check_requirements,
-    check_yaml,
-    clean_str,
-    cv2,
-    is_kaggle,
+    # check_yaml,
+    # clean_str,
+    # cv2,
+    # is_kaggle,
     unzip_file,
 )
 from utils.torch_utils import torch_distributed_zero_first
@@ -59,7 +60,6 @@ LOCAL_RANK = int(os.getenv("LOCAL_RANK", -1))  # https://pytorch.org/docs/stable
 RANK = int(os.getenv("RANK", -1))
 WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 PIN_MEMORY = str(os.getenv("PIN_MEMORY", True)).lower() == "true"  # global pin_memory for dataloaders
-#TODO 需要修改
 class InfiniteDataLoader(dataloader.DataLoader):
     """
     Dataloader that reuses workers.
@@ -101,7 +101,7 @@ class _RepeatSampler:
             yield from iter(self.sampler)
 class ClassificationDataset(torchvision.datasets.ImageFolder):
     """
-    YOLOv5 Classification Dataset.
+    Classification Dataset.
 
     Arguments
         root:  Dataset path
@@ -168,22 +168,3 @@ def create_classification_dataloader(
         worker_init_fn=seed_worker,
         generator=generator,
     )  # or DataLoader(persistent_workers=True)
-
-
-
-
-def make_dataSets(cfg,data_dir,folder,is_Train = True):
-    augment = is_Train
-    augs = classify_augmentations(augment,cfg)
-    # data_dir = cfg.DATASETS.DATA_DIR
-    return  torchvision.datasets.ImageFolder(
-        os.path.join(data_dir, folder),
-        transform=augs)
-def dataLoader(cfg,batch_size,data_dir,folder,is_Train = True,is_Test = False):
-    dataset = make_dataSets(cfg,data_dir,folder,is_Train)
-    shuffle = is_Train
-    drop_last = False if is_Test else True
-    # batch_size = cfg.SOLVER.BATCH_SIZE
-    return torch.utils.data.DataLoader(
-        dataset, batch_size, shuffle = shuffle, drop_last=drop_last)
-

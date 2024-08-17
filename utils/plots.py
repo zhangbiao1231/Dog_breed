@@ -19,7 +19,7 @@ def imshow_cls(im, labels=None, pred=None, names=None, nmax=25, verbose=False, f
     """Displays a grid of images with optional labels and predictions, saving to a file."""
     from utils.augmentations import denormalize
 
-    names = names or [f"class{i}" for i in range(1000)]
+    names = names or [f"class{i}" for i in range(120)]
     blocks = torch.chunk(
         denormalize(im.clone()).cpu().float(), len(im), dim=0
     )  # select batch index 0, block by channels
