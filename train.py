@@ -106,8 +106,10 @@ def train(opt,device):
             LOGGER.info(s)
 
     # Dataloaders
-    nc = len([x for x in (data_dir / "train").glob("*") if x.is_dir()])  # number of classes
     train_dir = data_dir / "train"
+    TEXT_LABELS = [str(x).split('/')[-1] for x in train_dir.glob("*") if x.is_dir()]#TODO
+    TEXT_LABELS.sort()
+    nc = len(TEXT_LABELS)  # number of classes
     # train_dir = data_dir / "train_valid"
     trainloader = create_classification_dataloader(
         path=train_dir,
@@ -131,9 +133,7 @@ def train(opt,device):
             rank=-1,
             workers=nw,
         )
-    # for X,y in validloader:
-    #     print(X.shape,y.shape)
-    #     break
+
     # model
     with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
         if Path(opt.model).is_file() or opt.model.endswith(".pt"): #TODO 需要修改attempt_load 函数
@@ -151,9 +151,6 @@ def train(opt,device):
     for param in finetune_net.features.parameters():
         param.requires_grad = False
     net = finetune_net.to(device)
-
-    # X = torch.zeros((1,3,224,224))
-    # print(net(X).shape)
 
     # Optimizer
     optimizer = smart_optimizer(model=net,name=opt.optimizer,
@@ -174,7 +171,7 @@ def train(opt,device):
     criterion = nn.CrossEntropyLoss(reduction="none")
     best_fitness = 0.0
     # scaler = amp.GradScaler(enabled=cuda)
-    val = valid_dir.stem  # 'val' or 'test'
+    val = valid_dir.stem  # 'valid' or 'test'
     LOGGER.info(
         f'Image sizes {imgsz} train, {imgsz} test\n'
         f'Using {nw * WORLD_SIZE} dataloader workers\n'
@@ -208,12 +205,12 @@ def train(opt,device):
                 mem = "%.3gG" % (torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0)  # (GB)
                 pbar.desc = f"{f'{epoch + 1}/{epochs}':>10}{mem:>10}{tloss:>12.3g}" + " " * 36
 
-                # Test #TODO 需要调试一下
-                # if i == len(pbar) - 1:  # last batch
-                #     top1, top5, vloss = validate.run(
-                #         model=net, dataloader=validloader, criterion=criterion, pbar=pbar
-                #     )  # test accuracy, loss
-                #     fitness = top1  # define fitness as top1 accuracy
+                # Test #
+                if i == len(pbar) - 1:  # last batch
+                    top1, top5, vloss = validate.run(
+                        model=net, dataloader=validloader, criterion=criterion, pbar=pbar,text_labels=TEXT_LABELS
+                    )  # test accuracy, loss
+                    fitness = top1  # define fitness as top1 accuracy
 
         # Scheduler
         scheduler.step()
@@ -227,9 +224,9 @@ def train(opt,device):
             # Log
             metrics = {
                 "train/loss": tloss,
-                # f"{val}/loss": vloss,
-                # "metrics/accuracy_top1": top1,
-                # "metrics/accuracy_top5": top5,
+                f"{val}/loss": vloss,
+                "metrics/accuracy_top1": top1,
+                "metrics/accuracy_top5": top5,
                 "lr/0": optimizer.param_groups[0]["lr"],
             }  # learning rate
             logger.log_metrics(metrics, epoch)
@@ -262,7 +259,7 @@ def train(opt,device):
             f"\nResults saved to {colorstr('bold', save_dir)}"
             f'\nPredict:         python classify/predict.py --weights {best} --source im.jpg'
             f'\nValidate:        python classify/val.py --weights {best} --data {data_dir}'
-            # f'\nExport:          python export.py --weights {best} --include onnx'
+            f'\nExport:          python export.py --weights {best} --include onnx'
             f"\nPyTorch Hub:     model = torch.hub.load('ultralytics/yolov5', 'custom', '{best}')"
             f'\nVisualize:       https://netron.app\n'
         )
@@ -270,12 +267,15 @@ def train(opt,device):
         # Plot examples
         images, labels = (x[:25] for x in next(iter(validloader)))  # first 25 images and labels
         pred = torch.max(net(images.to(device)), 1)[1]
-        file = imshow_cls(images, labels, pred, names=None, verbose=False, f=save_dir / "validimages.jpg") #TODO names需要修改
+
+        file = imshow_cls(images, labels, pred, names=TEXT_LABELS, verbose=False, f=save_dir / "validimages.jpg") #TODO names需要修改
 
         # Log results
         meta = {"epochs": epochs, "top1_acc": best_fitness, "date": datetime.now().isoformat()}
         logger.log_images(file, name="Test Examples (true-predicted)", epoch=epoch) #TODO 需要调试，保证tn可用
         # logger.log_model(best, epochs, metadata=meta)
+
+
 
 def parse_opt(known=False):
     """Parses command line arguments for YOLOv5 training including model path, dataset, epochs, and more, returning
