@@ -146,7 +146,7 @@ def seed_worker(worker_id):
     np.random.seed(worker_seed)
     random.seed(worker_seed)
 def create_classification_dataloader(
-    path, imgsz=224, batch_size=16, augment=True, cache=False, rank=-1, workers=8, shuffle=True
+    path, imgsz=224, batch_size=16, augment=True, cache=False, rank=-1, workers=8, shuffle=True,
 ):
     # Returns Dataloader object to be used with YOLOv5 Classifier
     """Creates a DataLoader for image classification, supporting caching, augmentation, and distributed training."""

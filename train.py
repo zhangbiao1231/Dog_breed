@@ -37,11 +37,13 @@ import val as validate
 from models.experimental import attempt_load
 # from models.yolo import ClassificationModel, DetectionModel
 from utils.dataloaders import create_classification_dataloader
+
 from utils.general import (
     DATASETS_DIR,
     LOGGER,
     TQDM_BAR_FORMAT,
     WorkingDirectory,
+    TEXT_LABELS,
     check_requirements,
     colorstr,
     download,
@@ -69,7 +71,7 @@ WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 def train(opt,device):
     """Trains a dog-greed classify model, managing datasets, model optimization, logging, and saving checkpoints."""
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
-    save_dir,data,bs,epochs,nw,imgsz,pretrained = (
+    save_dir,data,bs,epochs,nw,imgsz,pretrained,is_train= (
         opt.save_dir,
         Path(opt.data),
         opt.batch_size,
@@ -77,6 +79,7 @@ def train(opt,device):
         min(os.cpu_count() - 1, opt.workers),
         opt.imgsz,
         str(opt.pretrained).lower() == "true",
+        opt.is_train,
     )
     cuda = device.type != "cpu"
 
@@ -106,11 +109,9 @@ def train(opt,device):
             LOGGER.info(s)
 
     # Dataloaders
-    train_dir = data_dir / "train"
-    TEXT_LABELS = [str(x).split('/')[-1] for x in train_dir.glob("*") if x.is_dir()]#TODO
-    TEXT_LABELS.sort()
+    # train_dir = data_dir / "train"
     nc = len(TEXT_LABELS)  # number of classes
-    # train_dir = data_dir / "train_valid"
+    train_dir = data_dir / "train" if not is_train else data_dir / "train_valid"
     trainloader = create_classification_dataloader(
         path=train_dir,
         imgsz=imgsz,
@@ -119,10 +120,10 @@ def train(opt,device):
         cache=opt.cache,
         rank=LOCAL_RANK,
         workers=nw,
+        shuffle=True,
     )
 
-    # test_dir = data_dir / "test" # data/test
-    valid_dir = data_dir / "valid" # data/val
+    valid_dir = data_dir / "valid"
     if RANK in {-1, 0}:
         validloader = create_classification_dataloader(
             path=valid_dir,
@@ -132,6 +133,7 @@ def train(opt,device):
             cache=opt.cache,
             rank=-1,
             workers=nw,
+            shuffle=False,
         )
 
     # model
@@ -163,7 +165,7 @@ def train(opt,device):
         """Linear learning rate scheduler function, scaling learning rate from initial value to `lrf` over `epochs`."""
         return (1 - x / epochs) * (1 - lrf) + lrf  # linear
     # scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf) #余弦退火
-    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, 10, 0.9)
+    scheduler = torch.optim.lr_scheduler.StepLR(optimizer, opt.lr_period, opt.lr_decay)
 
     # Train
     t0 = time.time()
@@ -204,14 +206,12 @@ def train(opt,device):
                 tloss = (tloss * i + l.item()/labels.shape[0]) / (i + 1)  # update mean losses
                 mem = "%.3gG" % (torch.cuda.memory_reserved() / 1e9 if torch.cuda.is_available() else 0)  # (GB)
                 pbar.desc = f"{f'{epoch + 1}/{epochs}':>10}{mem:>10}{tloss:>12.3g}" + " " * 36
-
-                # Test #
+                # validate #
                 if i == len(pbar) - 1:  # last batch
                     top1, top5, vloss = validate.run(
-                        model=net, dataloader=validloader, criterion=criterion, pbar=pbar,text_labels=TEXT_LABELS
+                        model=net, dataloader=validloader, criterion=criterion, pbar=pbar
                     )  # test accuracy, loss
                     fitness = top1  # define fitness as top1 accuracy
-
         # Scheduler
         scheduler.step()
 
@@ -274,6 +274,7 @@ def train(opt,device):
         meta = {"epochs": epochs, "top1_acc": best_fitness, "date": datetime.now().isoformat()}
         logger.log_images(file, name="Test Examples (true-predicted)", epoch=epoch) #TODO 需要调试，保证tn可用
         # logger.log_model(best, epochs, metadata=meta)
+        logger.log_metrics()
 
 
 
@@ -297,6 +298,8 @@ def parse_opt(known=False):
     parser.add_argument("--pretrained", nargs="?", const=True, default=True, help="start from i.e. --pretrained False")
     parser.add_argument("--optimizer", choices=["SGD", "Adam", "AdamW", "RMSProp"], default="SGD", help="optimizer")
     parser.add_argument("--lr0", type=float, default=1e-3, help="initial learning rate")
+    parser.add_argument("--lr_period", type=int, default=10, help="learning rate period")
+    parser.add_argument("--lr_decay", type=float, default=0.9, help="learning rate * decay over period per")
     parser.add_argument("--decay", type=float, default=1e-4, help="weight decay")
     parser.add_argument("--label-smoothing", type=float, default=0.1, help="Label smoothing epsilon")
     parser.add_argument("--cutoff", type=int, default=None, help="Model layer cutoff index for Classify() head")
@@ -304,6 +307,7 @@ def parse_opt(known=False):
     parser.add_argument("--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    parser.add_argument("--is_trian", default=False, help="")
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
 def main(opt):

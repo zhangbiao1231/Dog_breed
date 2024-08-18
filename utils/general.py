@@ -48,6 +48,7 @@ from ultralytics.utils.checks import check_requirements
 from utils import TryExcept
 from utils.downloads import curl_download
 # from utils.metrics import fitness
+from utils.reorg import read_csv_labels
 
 FILE = Path(__file__).resolve()
 ROOT = FILE.parents[1]  # root directory
@@ -60,6 +61,9 @@ AUTOINSTALL = str(os.getenv("dog-breed_AUTOINSTALL", True)).lower() == "true"  #
 VERBOSE = str(os.getenv("dog-breed_VERBOSE", True)).lower() == "true"  # global verbose mode
 TQDM_BAR_FORMAT = "{l_bar}{bar:10}{r_bar}"  # tqdm bar format
 FONT = "Arial.ttf"  # https://github.com/ultralytics/assets/releases/download/v0.0.0/Arial.ttf
+
+_,TEXT_LABELS = read_csv_labels(DATASETS_DIR / 'dog-breed-identification/labels.csv') #
+TEXT_LABELS = sorted(TEXT_LABELS)
 
 torch.set_printoptions(linewidth=320, precision=5, profile="long")
 np.set_printoptions(linewidth=320, formatter={"float_kind": "{:11.5g}".format})  # format short g, %precision=5

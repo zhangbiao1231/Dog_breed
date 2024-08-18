@@ -27,6 +27,8 @@ from pathlib import Path
 
 import torch
 import torch.nn as nn
+import torch.nn.functional as F
+import torchvision
 from tqdm import tqdm
 
 FILE = Path(__file__).resolve()
@@ -35,14 +37,12 @@ if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))  # add ROOT to PATH
 ROOT = Path(os.path.relpath(ROOT, Path.cwd()))  # relative
 
-# from models.common import DetectMultiBackend
 from utils.dataloaders import create_classification_dataloader
 from utils.general import (
     LOGGER,
     TQDM_BAR_FORMAT,
+    TEXT_LABELS,
     Profile,
-    # check_img_size,
-    check_requirements,
     colorstr,
     increment_path,
     print_args,
@@ -52,24 +52,24 @@ from utils.torch_utils import select_device, smart_inference_mode
 
 @smart_inference_mode()
 def run(
-    data="",  # dataset dir
-    weights="",  # model.pt path(s)
-    batch_size=64,  # batch size
-    imgsz=224,  # inference size (pixels)
-    device="",  # cuda device, i.e. 0 or 0,1,2,3 or cpu
-    workers=8,  # max dataloader workers (per RANK in DDP mode)
-    verbose=False,  # verbose output
-    project=ROOT / "runs/val-cls",  # save to project/name
-    name="exp",  # save to project/name
-    exist_ok=False,  # existing project/name ok, do not increment
-    half=False,  # use FP16 half-precision inference
-    model=None,
-    dataloader=None,
-    criterion=None,
-    pbar=None,
-    text_labels = None,
+        data="",  # dataset dir
+        weights="",  # model.pt path(s)
+        batch_size=64,  # batch size
+        imgsz=224,  # inference size (pixels)
+        device="",  # cuda device, i.e. 0 or 0,1,2,3 or cpu
+        workers=8,  # max dataloader workers (per RANK in DDP mode)
+        verbose=False,  # verbose output
+        project=ROOT / "runs/val-cls",   # save to project/name
+        name="exp",  # save to project/name
+        exist_ok=False,  # existing project/name ok, do not increment
+        half=False,  # use FP16 half-precision inference
+        model=None,
+        dataloader=None,
+        criterion=None,
+        pbar=None,
+        is_test=False,
 ):
-    """Validates a YOLOv5 classification model on a dataset, computing metrics like top1 and top5 accuracy."""
+    """Validates a resnet classification model on a dataset, computing metrics like top1 and top5 accuracy."""
     # Initialize/load model and set device
     training = model is not None
     if training:  # called by train.py
@@ -80,6 +80,8 @@ def run(
         device = select_device(device, batch_size=batch_size)
 
         # Directories
+        if is_test:
+            project = ROOT / "runs/test-cls"
         save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
         save_dir.mkdir(parents=True, exist_ok=True)  # make dir
 
@@ -92,14 +94,17 @@ def run(
         model = model[-1]
 
         # Dataloader
-        data = Path(data)
-        valid_dir = data / "valid" if (data / "valid").exists() else data / "test"  # data/test or data/val
-        text_labels = [str(x).split('/')[-1] for x in valid_dir.glob("*") if x.is_dir()] #TypeError: unsupported format string passed to PosixPath.__format__
-        text_labels.sort()
+        data = Path(data)#
+        valid_dir = data / "valid" if not is_test else data / "test"  # data/test or data/val
         dataloader = create_classification_dataloader(
-            path=valid_dir, imgsz=imgsz, batch_size=batch_size, augment=False, rank=-1, workers=workers
+            path=valid_dir,
+            imgsz=imgsz,
+            batch_size=batch_size,
+            augment=False,
+            rank=-1,
+            workers=workers,
+            shuffle=False,
         )
-
     model.eval()
     pred, targets, loss, dt = [], [], 0, (Profile(device=device), Profile(device=device), Profile(device=device))
     n = len(dataloader)  # number of batches
@@ -109,47 +114,59 @@ def run(
     with torch.cuda.amp.autocast(enabled=device.type != "cpu"):
         for images, labels in bar:
             with dt[0]:
-                images, labels = images.to(device, non_blocking=True), labels.to(device) #(64,3,224,224) (64,)
+                images, labels = images.to(device, non_blocking=True), labels.to(device)  # (64,3,224,224) (64,)
             # Inference
             with dt[1]:
-                y = model(images) #(64,120)
+                y = model(images)  # (64,120)
 
             with dt[2]:
-                pred.append(y.argsort(1, descending=True)[:, :5]) #(11,64,5) +（1，16，5）
-                targets.append(labels) #(11,64) +(1,16)
-                if criterion:
-                    loss += criterion(y, labels).sum()/len(labels) #(64,120) (64,) #最后一个batch 是16，不是64
-
-    loss /= n
-    pred, targets = torch.cat(pred), torch.cat(targets) #preds.shape ->(11*64+1*16,5) = (720,5) ;#targets.shape ->(11*64+1*16,) = (720,)
-    correct = (targets[:, None] == pred).float() #(720,5)
-    acc = torch.stack((correct[:, 0], correct.max(1).values), dim=1)  # (top1, top5) accuracy ;acc.shape -> (720,2) 第一列是top1,第二列是top5
-    top1, top5 = acc.mean(0).tolist() #按dim0求均值并分解成两个数据列表，存储top1和top5数据
-
-    if pbar:
-        pbar.desc = f"{pbar.desc[:-36]}{loss:>12.3g}{top1:>12.3g}{top5:>12.3g}"
-    if verbose:  # all classes
-        LOGGER.info(f"{'Class':>24}{'Images':>12}{'top1_acc':>12}{'top5_acc':>12}")
-        LOGGER.info(f"{'all':>24}{targets.shape[0]:>12}{top1:>12.3g}{top5:>12.3g}")
-        for i, c in enumerate(text_labels): #model.names 其实就是列表 [0:dog1,1:dog2,...,120]
-            acc_i = acc[targets == i]
-            top1i, top5i = acc_i.mean(0).tolist()
-            LOGGER.info(f"{c:>24}{acc_i.shape[0]:>12}{top1i:>12.3g}{top5i:>12.3g}")
-
-        # Print results
-        t = tuple(x.t / len(dataloader.dataset.samples) * 1e3 for x in dt)  # speeds per image
-        shape = (1, 3, imgsz, imgsz)
-        LOGGER.info(f"Speed: %.1fms pre-process, %.1fms inference, %.1fms post-process per image at shape {shape}" % t)
-        LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
-
-    return top1, top5, loss
+                if not is_test:
+                    pred.append(y.argsort(1, descending=True)[:, :5])  # (11,64,5) +（1，16，5）
+                    targets.append(labels)  # (11,64) +(1,16)
+                    if criterion:
+                        loss += criterion(y, labels).sum() / len(labels)  # (64,120) (64,) #最后一个batch 是16，不是64
+                else:
+                    pred.extend(F.softmax(y, dim=1).cpu().detach().numpy())
+    if not is_test:
+        loss /= n
+        pred, targets = torch.cat(pred), torch.cat(targets)  # preds.shape ->(11*64+1*16,5) = (720,5) ;#targets.shape ->(11*64+1*16,) = (720,)
+        correct = (targets[:, None] == pred).float()  # (720,5)
+        acc = torch.stack((correct[:, 0], correct.max(1).values),
+                          dim=1)  # (top1, top5) accuracy ;acc.shape -> (720,2) 第一列是top1,第二列是top5
+        top1, top5 = acc.mean(0).tolist()  # 按dim0求均值并分解成两个数据列表，存储top1和top5数据
+        if pbar:
+            pbar.desc = f"{pbar.desc[:-36]}{loss:>12.3g}{top1:>12.3g}{top5:>12.3g}"
+        if verbose:  # all classes
+            LOGGER.info(f"{'Class':>24}{'Images':>12}{'top1_acc':>12}{'top5_acc':>12}")
+            LOGGER.info(f"{'all':>24}{targets.shape[0]:>12}{top1:>12.3g}{top5:>12.3g}")
+            for i, c in enumerate(TEXT_LABELS):  # model.names 其实就是列表 [0:dog1,1:dog2,...,120]
+                acc_i = acc[targets == i]
+                top1i, top5i = acc_i.mean(0).tolist()
+                LOGGER.info(f"{c:>24}{acc_i.shape[0]:>12}{top1i:>12.3g}{top5i:>12.3g}")
+        return top1, top5, loss
+    else:
+        ids = sorted(os.listdir(
+            os.path.join(valid_dir, 'unknown')))
+        with open(save_dir / 'submission.csv', 'w') as f:
+            f.write('id,' + ','.join(TEXT_LABELS) + '\n')
+            for i, output in zip(ids, pred):
+                f.write(i.split('.')[0] + ',' + ','.join(
+                    [str(num) for num in output]) + '\n')
+    # Print results
+    t = tuple(x.t / len(dataloader.dataset.samples) * 1e3 for x in dt)  # speeds per image
+    shape = (1, 3, imgsz, imgsz)
+    LOGGER.info(f"Speed: %.1fms pre-process, %.1fms inference, %.1fms post-process per image at shape {shape}" % t)
+    LOGGER.info(f"Results saved to {colorstr('bold', save_dir)}")
 
 
 def parse_opt():
     """Parses and returns command line arguments for YOLOv5 model evaluation and inference settings."""
     parser = argparse.ArgumentParser()
-    parser.add_argument("--data", type=str, default=ROOT / "data/datasets/dog-breed-identification", help="dataset path")
-    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/exp30/weights/best.pt", help="model.pt path(s)")
+    parser.add_argument("--data", type=str, default=ROOT / "data/datasets/dog-breed-identification",
+                        help="dataset path")
+    #TODO 用最后的训练模型last.pt文件
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/exp30/weights/last.pt",
+                        help="model.pt path(s)")
     parser.add_argument("--batch-size", type=int, default=64, help="batch size")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="inference size (pixels)")
     parser.add_argument("--device", default="", help="cuda device, i.e. 0 or 0,1,2,3 or cpu")
@@ -159,8 +176,8 @@ def parse_opt():
     parser.add_argument("--name", default="exp", help="save to project/name")
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
-    parser.add_argument("--text_labels", action="store_true", help="")
     # parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
+    parser.add_argument("--is_test", default=False, help="")
     opt = parser.parse_args()
     print_args(vars(opt))
     return opt

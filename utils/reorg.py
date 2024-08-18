@@ -17,7 +17,7 @@ def read_csv_labels(fname):
     with open(fname, 'r') as f:
         lines = f.readlines()[1:]
     tokens = [l.rstrip().split(',') for l in lines]
-    return dict(((name, label) for name, label in tokens))
+    return dict(((name, label) for name, label in tokens)),list(set([label for _,label in tokens]))
 def copyfile(filename, target_dir):
     os.makedirs(target_dir, exist_ok=True)
     shutil.copy(filename, target_dir)
@@ -46,7 +46,7 @@ def reorg_test(data_dir):
                  os.path.join(data_dir, 'train_valid_test', 'test',
                               'unknown'))
 def reorg_dog_data(data_dir, valid_ratio):
-    labels = read_csv_labels(os.path.join(data_dir, 'labels.csv'))
+    labels,_ = read_csv_labels(os.path.join(data_dir, 'labels.csv'))
     reorg_train_valid(data_dir, labels, valid_ratio)
     reorg_test(data_dir)
 def parse_opt():
