@@ -46,6 +46,7 @@ from utils.general import (
     colorstr,
     increment_path,
     print_args,
+    save_to_csv,
 )
 from utils.torch_utils import select_device, smart_inference_mode
 
@@ -84,6 +85,7 @@ def run(
             project = ROOT / "runs/test-cls"
         save_dir = increment_path(Path(project) / name, exist_ok=exist_ok)  # increment run
         save_dir.mkdir(parents=True, exist_ok=True)  # make dir
+        csv = save_dir/"results.csv"
 
         # Load model
         model = nn.ModuleList()
@@ -143,15 +145,28 @@ def run(
                 acc_i = acc[targets == i]
                 top1i, top5i = acc_i.mean(0).tolist()
                 LOGGER.info(f"{c:>24}{acc_i.shape[0]:>12}{top1i:>12.3g}{top5i:>12.3g}")
+
+            # Log
+                metrics = {
+                    "Labels": c,
+                    "Images": acc_i.shape[0],
+                    "metrics/accuracy_top1": top1i,
+                    "metrics/accuracy_top5": top5i,
+                }  # learning rate
+
+                keys, vals = list(metrics.keys()), list(metrics.values())
+                n = len(metrics) +1# number of cols
+                s = "" if csv.exists() else (("%30s," * n % tuple(["Classes"]+keys)).rstrip(",") + "\n")  # header
+                with open(csv, "a") as f:
+                    f.write(s + ("%30.5g," % i) +
+                            ("%30s," % vals[0]) +
+                            ("%30.5g," * (n-2) % tuple(vals[1:])).rstrip(",") + "\n")
         return top1, top5, loss
     else:
-        ids = sorted(os.listdir(
-            os.path.join(valid_dir, 'unknown')))
-        with open(save_dir / 'submission.csv', 'w') as f:
-            f.write('id,' + ','.join(TEXT_LABELS) + '\n')
-            for i, output in zip(ids, pred):
-                f.write(i.split('.')[0] + ',' + ','.join(
-                    [str(num) for num in output]) + '\n')
+        save_to_csv(valid_dir / "unknown",
+                    csv,
+                    pred,
+                    TEXT_LABELS)
     # Print results
     t = tuple(x.t / len(dataloader.dataset.samples) * 1e3 for x in dt)  # speeds per image
     shape = (1, 3, imgsz, imgsz)
@@ -164,8 +179,8 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default=ROOT / "data/datasets/dog-breed-identification",
                         help="dataset path")
-    #TODO 用最后的训练模型last.pt文件
-    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/exp30/weights/last.pt",
+
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34/weights/best.pt",
                         help="model.pt path(s)")
     parser.add_argument("--batch-size", type=int, default=64, help="batch size")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="inference size (pixels)")
@@ -177,7 +192,7 @@ def parse_opt():
     parser.add_argument("--exist-ok", action="store_true", help="existing project/name ok, do not increment")
     parser.add_argument("--half", action="store_true", help="use FP16 half-precision inference")
     # parser.add_argument("--dnn", action="store_true", help="use OpenCV DNN for ONNX inference")
-    parser.add_argument("--is_test", default=False, help="")
+    parser.add_argument("--is-test", default=False, help="")
     opt = parser.parse_args()
     print_args(vars(opt))
     return opt

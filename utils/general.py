@@ -386,6 +386,14 @@ def download(url, dir=".", unzip=True, delete=True, curl=False, threads=1, retry
         for u in [url] if isinstance(url, (str, Path)) else url:
             download_one(u, dir)
 
+def save_to_csv(valid_dir,csv,pred,TEXT_LABELS):
+    ids = sorted(os.listdir(valid_dir))
+    with open(csv, 'w') as f:
+        f.write('id,' + ','.join(TEXT_LABELS) + '\n')
+        for i, output in zip(ids, pred):
+            f.write(i.split('.')[0] + ',' + ','.join(
+                [str(num) for num in output]) + '\n')
+
 def try_gpu(i=0):  #@save
     """如果存在，则返回gpu(i)，否则返回cpu()"""
     if torch.cuda.device_count() >= i + 1:
@@ -411,3 +419,4 @@ class Accumulator:  #@save
 
     def __getitem__(self, idx):
         return self.data[idx]
+

@@ -9,6 +9,7 @@ from pathlib import Path
 import torch
 
 from utils.general import LOGGER, colorstr,cv2
+from torch.utils.tensorboard import SummaryWriter
 
 # from utils.loggers.clearml.clearml_utils import ClearmlLogger
 # from utils.loggers.wandb.wandb_utils import WandbLogger
@@ -19,13 +20,13 @@ LOGGERS = ("csv", "tb", "wandb", "clearml", "comet")  # *.csv, TensorBoard, Weig
 RANK = int(os.getenv("RANK", -1))
 
 
-try:
-    from torch.utils.tensorboard import SummaryWriter
-except ImportError:
-
-    def SummaryWriter(*args):
-        """Fall back to SummaryWriter returning None if TensorBoard is not installed."""
-        return None  # None = SummaryWriter(str)
+# try:
+#     from torch.utils.tensorboard import SummaryWriter
+# except ImportError:
+#
+#     def SummaryWriter(*args):
+#         """Fall back to SummaryWriter returning None if TensorBoard is not installed."""
+#         return None  # None = SummaryWriter(str)
 
 
 def _json_default(value):
@@ -79,7 +80,7 @@ class Loggers:
         s = self.save_dir
         if "tb" in self.include:
             prefix = colorstr("TensorBoard: ")
-            self.logger.info(f"{prefix}Start with 'tensorboard --logdir {s.parent}', view at http://localhost:6006/")#TODO 链接失败，需要处理
+            self.logger.info(f"{prefix}Start with 'tensorboard --logdir {s.parent}', view at http://localhost:6006/")
             self.tb = SummaryWriter(str(s))
 
     def remote_dataset(self):
@@ -249,12 +250,13 @@ class GenericLogger:
         self.include = include
         self.console_logger = console_logger
         self.csv = self.save_dir / "results.csv"  # CSV logger
+
         if "tb" in self.include:
             prefix = colorstr("TensorBoard: ")
             self.console_logger.info(
                 f"{prefix}Start with 'tensorboard --logdir {self.save_dir.parent}', view at http://localhost:6006/"
             )
-            self.tb = SummaryWriter(str(self.save_dir))
+            # self.tb = SummaryWriter(str(self.save_dir))
 
     def log_metrics(self, metrics, epoch):
         """Logs metrics to CSV, TensorBoard, W&B, and ClearML; `metrics` is a dict, `epoch` is an int."""
@@ -265,18 +267,21 @@ class GenericLogger:
             with open(self.csv, "a") as f:
                 f.write(s + ("%23.5g," * n % tuple([epoch] + vals)).rstrip(",") + "\n")
 
-        if self.tb:
-            for k, v in metrics.items():
-                self.tb.add_scalar(k, v, epoch)
+        # if self.tb:
+        #     for k, v in metrics.items():
+        #         self.tb.add_scalar(k, v, epoch)
 
     def log_images(self, files, name="Images", epoch=0):
         """Logs images to all loggers with optional naming and epoch specification."""
         files = [Path(f) for f in (files if isinstance(files, (tuple, list)) else [files])]  # to Path
         files = [f for f in files if f.exists()]  # filter by exists
 
-        if self.tb:
-            for f in files:
-                self.tb.add_image(f.stem, cv2.imread(str(f))[..., ::-1], epoch, dataformats="HWC")
+        # if self.tb:
+        #     for f in files:
+        #         self.tb.add_image(tag =f.stem,
+        #                           img_tensor=cv2.imread(str(f))[..., ::-1],
+        #                           global_step=epoch,
+        #                           dataformats="HWC")
 
     def log_graph(self, model, imgsz=(640, 640)):
         """Logs model graph to all configured loggers with specified input image size."""
@@ -312,7 +317,7 @@ def log_tensorboard_graph(tb, model, imgsz=(640, 640)):
         im = torch.zeros((1, 3, *imgsz)).to(p.device).type_as(p)  # input image (WARNING: must be zeros, not empty)
         with warnings.catch_warnings():
             warnings.simplefilter("ignore")  # suppress jit trace warning
-            tb.add_graph(torch.jit.trace(de_parallel(model), im, strict=False), [])
+            tb.add_graph(torch.jit.trace(model, im, strict=False), [])
     except Exception as e:
         LOGGER.warning(f"WARNING ⚠️ TensorBoard graph visualization failure {e}")
 

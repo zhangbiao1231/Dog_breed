@@ -52,7 +52,8 @@ from utils.general import (
     print_args,
     yaml_save,
 )
-from utils.loggers import GenericLogger
+from utils.loggers import GenericLogger,SummaryWriter
+# from torch.utils.tensorboard import SummaryWriter
 from utils.plots import imshow_cls
 from utils.torch_utils import (
     model_info,
@@ -93,6 +94,7 @@ def train(opt,device):
 
     # Logger
     logger = GenericLogger(opt=opt, console_logger=LOGGER) if RANK in {-1, 0} else None
+    # writer = SummaryWriter(log_dir=str(save_dir))
 
     # Download Dataset
     with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
@@ -138,7 +140,7 @@ def train(opt,device):
 
     # model
     with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
-        if Path(opt.model).is_file() or opt.model.endswith(".pt"): #TODO 需要修改attempt_load 函数
+        if Path(opt.model).is_file() or opt.model.endswith(".pt"): #TODO 加载模型、编辑模型
             model = attempt_load(opt.model, device="cpu", fuse=False)
         elif opt.model in torchvision.models.__dict__:  # TorchVision models i.e. resnet50, efficientnet_b0
             finetune_net = nn.Sequential()
@@ -154,12 +156,29 @@ def train(opt,device):
         param.requires_grad = False
     net = finetune_net.to(device)
 
+    # Info
+    if RANK in {-1, 0}:
+    #     # model.names = trainloader.dataset.classes  # attach class names
+    #     # model.transforms = testloader.dataset.torch_transforms  # attach inference transforms
+    #     # model_info(model)
+    #     # if opt.verbose:
+    #     # LOGGER.info(model)
+        images, labels = next(iter(trainloader))
+        writer = SummaryWriter(str(save_dir))
+        writer.add_images(
+            tag="train-image",
+            img_tensor=images[:16],
+            global_step=0,
+            dataformats="NCHW"
+        )
+
+#TODO 断点重训功能
     # Optimizer
     optimizer = smart_optimizer(model=net,name=opt.optimizer,
                                 lr=opt.lr0,momentum=0.9,
                                 decay=opt.decay)
     # Scheduler
-    lrf = 0.01  # final lr (fraction of lr0)
+    lrf = opt.lrf  # final lr (fraction of lr0)
     # lf = lambda x: ((1 + math.cos(x * math.pi / epochs)) / 2) * (1 - lrf) + lrf  # cosine
     def lf(x):
         """Linear learning rate scheduler function, scaling learning rate from initial value to `lrf` over `epochs`."""
@@ -212,6 +231,7 @@ def train(opt,device):
                         model=net, dataloader=validloader, criterion=criterion, pbar=pbar
                     )  # test accuracy, loss
                     fitness = top1  # define fitness as top1 accuracy
+
         # Scheduler
         scheduler.step()
 
@@ -230,6 +250,17 @@ def train(opt,device):
                 "lr/0": optimizer.param_groups[0]["lr"],
             }  # learning rate
             logger.log_metrics(metrics, epoch)
+            # scalars方法会创建三个目录存放日志，tb中勾选可以叠加图像
+            # writer.add_scalars(main_tag="training over epoch",
+            #                   tag_scalar_dict={"train/loss": tloss,
+            #                                    f"{val}/loss": vloss,
+            #                                    "metrics/accuracy_top1": top1},
+            #                   global_step=epoch,)
+            # #scalars方法会创建三个目录存放日志，tb中勾选可以叠加图像
+            for k ,v in metrics.items():
+                writer.add_scalar(tag=k,
+                                  scalar_value=v,
+                                  global_step=epoch+1)
 
             # Save model
             final_epoch = epoch + 1 == epochs
@@ -265,16 +296,25 @@ def train(opt,device):
         )
 
         # Plot examples
-        images, labels = (x[:25] for x in next(iter(validloader)))  # first 25 images and labels
+        images, labels = (x[:16] for x in next(iter(validloader)))  # first 16 images and labels
+        #需要去标准化
+        from utils.augmentations import denormalize
+
         pred = torch.max(net(images.to(device)), 1)[1]
-
-        file = imshow_cls(images, labels, pred, names=TEXT_LABELS, verbose=False, f=save_dir / "validimages.jpg") #TODO names需要修改
-
+        file = imshow_cls(images, labels, pred, names=TEXT_LABELS, verbose=False, f=save_dir / "validimages.jpg")
         # Log results
         meta = {"epochs": epochs, "top1_acc": best_fitness, "date": datetime.now().isoformat()}
-        logger.log_images(file, name="Test Examples (true-predicted)", epoch=epoch) #TODO 需要调试，保证tn可用
+        logger.log_images(file, name="Test Examples (true-predicted)", epoch=final_epoch)
+        # import cv2
+        import matplotlib.image as mpimg
+        writer.add_image(file.stem,
+                         # img_tensor=cv2.imread(str(file))[..., ::-1],
+                         img_tensor=mpimg.imread(str(file)),
+                         global_step=final_epoch,
+                         dataformats="HWC")
+        writer.close()
         # logger.log_model(best, epochs, metadata=meta)
-        logger.log_metrics()
+
 
 
 
@@ -298,16 +338,17 @@ def parse_opt(known=False):
     parser.add_argument("--pretrained", nargs="?", const=True, default=True, help="start from i.e. --pretrained False")
     parser.add_argument("--optimizer", choices=["SGD", "Adam", "AdamW", "RMSProp"], default="SGD", help="optimizer")
     parser.add_argument("--lr0", type=float, default=1e-3, help="initial learning rate")
-    parser.add_argument("--lr_period", type=int, default=10, help="learning rate period")
-    parser.add_argument("--lr_decay", type=float, default=0.9, help="learning rate * decay over period per")
+    parser.add_argument("--lrf", type=float, default=1e-2, help="terminal learning rate")
+    parser.add_argument("--lr-period", type=int, default=10, help="learning rate period")
+    parser.add_argument("--lr-decay", type=float, default=0.9, help="learning rate * decay over period per")
     parser.add_argument("--decay", type=float, default=1e-4, help="weight decay")
     parser.add_argument("--label-smoothing", type=float, default=0.1, help="Label smoothing epsilon")
     parser.add_argument("--cutoff", type=int, default=None, help="Model layer cutoff index for Classify() head")
     parser.add_argument("--dropout", type=float, default=None, help="Dropout (fraction)")
     parser.add_argument("--verbose", action="store_true", help="Verbose mode")
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
-    parser.add_argument("--local_rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
-    parser.add_argument("--is_trian", default=False, help="")
+    parser.add_argument("--local-rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
+    parser.add_argument("--is-train", default=False, help="")
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
 def main(opt):
