@@ -190,7 +190,7 @@ def parse_opt():
     parser.add_argument("--data", type=str, default=ROOT / "data/datasets/dog-breed-identification",
                         help="dataset path")
     # parser.add_argument("--model", type=str, default="resnet34", help="initial weights path")
-    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test6/weights/best.pt",
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test11/weights/last.pt",
                         help="model.pt path(s)")
     parser.add_argument("--batch-size", type=int, default=64, help="batch size")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="inference size (pixels)")

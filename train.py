@@ -334,7 +334,7 @@ def parse_opt(known=False):
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default= "resnet34", help="initial weights path")
-    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test10/weights/last.pt",
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test11/weights/last.pt",
                         help="model.pt path(s)")
     parser.add_argument("--data", type=str, default="dog-breed-identification", help="kaggle_cifar10_tiny, kaggle_dog_tiny，banana-detection, VOCtrainval_11-May-2012, , ...")
     parser.add_argument("--epochs", type=int, default=10, help="total training epochs")
