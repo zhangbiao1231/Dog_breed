@@ -394,6 +394,12 @@ def save_to_csv(valid_dir,csv,pred,TEXT_LABELS):
             f.write(i.split('.')[0] + ',' + ','.join(
                 [str(num) for num in output]) + '\n')
 
+def intersect_dicts(da, db, exclude=()):
+    """Returns intersection of `da` and `db` dicts with matching keys and shapes, excluding `exclude` keys; uses `da`
+    values.
+    """
+    return {k: v for k, v in da.items() if k in db and all(x not in k for x in exclude) and v.shape == db[k].shape}
+
 def try_gpu(i=0):  #@save
     """如果存在，则返回gpu(i)，否则返回cpu()"""
     if torch.cuda.device_count() >= i + 1:

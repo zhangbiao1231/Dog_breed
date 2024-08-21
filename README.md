@@ -17,3 +17,6 @@
 
 > Todolist data 19/8
 >> 断点续训功能 resume
+
+> Todolist data 21/8-23/8
+>> 建模功能 

@@ -341,6 +341,26 @@ def smart_inference_mode(torch_1_9=check_version(torch.__version__, "1.9.0")):
         return (torch.inference_mode if torch_1_9 else torch.no_grad)()(fn)
 
     return decorate
+def smart_resume(ckpt, optimizer, ema=None, weights="yolov5s.pt", epochs=300, resume=True):
+    """Resumes training from a checkpoint, updating optimizer, ema, and epochs, with optional resume verification."""
+    best_fitness = 0.0
+    start_epoch = ckpt["epoch"] + 1
+    if ckpt["optimizer"] is not None:
+        optimizer.load_state_dict(ckpt["optimizer"])  # optimizer
+        best_fitness = ckpt["best_fitness"]
+    if ema and ckpt.get("ema"):
+        ema.ema.load_state_dict(ckpt["ema"].float().state_dict())  # EMA
+        ema.updates = ckpt["updates"]
+    if resume:
+        assert start_epoch > 0, (
+            f"{weights} training to {epochs} epochs is finished, nothing to resume.\n"
+            f"Start a new training without --resume, i.e. 'python train.py --weights {weights}'"
+        )
+        LOGGER.info(f"Resuming training from {weights} from epoch {start_epoch} to {epochs} total epochs")
+    if epochs < start_epoch:
+        LOGGER.info(f"{weights} has been trained for {ckpt['epoch']} epochs. Fine-tuning for {epochs} more epochs.")
+        epochs += ckpt["epoch"]  # finetune additional epochs
+    return best_fitness, start_epoch, epochs
 class ModelEMA:
     """Updated Exponential Moving Average (EMA) from https://github.com/rwightman/pytorch-image-models
     Keeps a moving average of everything in the model state_dict (parameters and buffers)
@@ -452,8 +472,8 @@ def smart_resume(ckpt, optimizer, ema=None, weights="yolov5s.pt", epochs=300, re
         )
         LOGGER.info(f"Resuming training from {weights} from epoch {start_epoch} to {epochs} total epochs")
     if epochs < start_epoch:
-        LOGGER.info(f"{weights} has been trained for {ckpt['epoch']} epochs. Fine-tuning for {epochs} more epochs.")
-        epochs += ckpt["epoch"]  # finetune additional epochs
+        LOGGER.info(f"{weights} has been trained for {start_epoch} epochs. Fine-tuning for {epochs} more epochs.")
+        epochs += start_epoch  # finetune additional epochs
     return best_fitness, start_epoch, epochs
 def is_parallel(model):
     """Checks if the model is using Data Parallelism (DP) or Distributed Data Parallelism (DDP)."""

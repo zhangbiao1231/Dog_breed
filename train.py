@@ -37,7 +37,7 @@ import val as validate
 from models.experimental import attempt_load
 # from models.yolo import ClassificationModel, DetectionModel
 from utils.dataloaders import create_classification_dataloader
-
+from models import get_Net
 from utils.general import (
     DATASETS_DIR,
     LOGGER,
@@ -48,18 +48,20 @@ from utils.general import (
     colorstr,
     download,
     increment_path,
+    intersect_dicts,
     init_seeds,
     print_args,
     yaml_save,
 )
 from utils.loggers import GenericLogger,SummaryWriter
-# from torch.utils.tensorboard import SummaryWriter
+from models.get_Net import get_net
 from utils.plots import imshow_cls
 from utils.torch_utils import (
     model_info,
     reshape_classifier_output,
     select_device,
     smart_optimizer,
+    smart_resume,
     de_parallel,
     smartCrossEntropyLoss,
     torch_distributed_zero_first,
@@ -72,15 +74,18 @@ WORLD_SIZE = int(os.getenv("WORLD_SIZE", 1))
 def train(opt,device):
     """Trains a dog-greed classify model, managing datasets, model optimization, logging, and saving checkpoints."""
     init_seeds(opt.seed + 1 + RANK, deterministic=True)
-    save_dir,data,bs,epochs,nw,imgsz,pretrained,is_train= (
+    save_dir,weights,data,bs,epochs,resume,nw,imgsz,pretrained,is_train,freeze= (
         opt.save_dir,
+        opt.weights,
         Path(opt.data),
         opt.batch_size,
         opt.epochs,
+        opt.resume,
         min(os.cpu_count() - 1, opt.workers),
         opt.imgsz,
         str(opt.pretrained).lower() == "true",
         opt.is_train,
+        opt.freeze,
     )
     cuda = device.type != "cpu"
 
@@ -89,12 +94,15 @@ def train(opt,device):
     wdir.mkdir(parents=True, exist_ok=True)  # make dir
     last, best = wdir / "last.pt", wdir / "best.pt"
 
+
     # Save run settings
     yaml_save(save_dir / "opt.yaml", vars(opt))
 
     # Logger
     logger = GenericLogger(opt=opt, console_logger=LOGGER) if RANK in {-1, 0} else None
-    # writer = SummaryWriter(log_dir=str(save_dir))
+
+    # tensorboard
+    writer = SummaryWriter(log_dir=str(save_dir))
 
     # Download Dataset
     with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
@@ -139,42 +147,40 @@ def train(opt,device):
         )
 
     # model
-    with torch_distributed_zero_first(LOCAL_RANK), WorkingDirectory(ROOT):
-        if Path(opt.model).is_file() or opt.model.endswith(".pt"): #TODO 加载模型、编辑模型
-            model = attempt_load(opt.model, device="cpu", fuse=False)
-        elif opt.model in torchvision.models.__dict__:  # TorchVision models i.e. resnet50, efficientnet_b0
-            finetune_net = nn.Sequential()
-            finetune_net.features = torchvision.models.__dict__[opt.model](weights="DEFAULT" if pretrained else None)
-        else:
-            m = hub.list("ultralytics/yolov5")  # + hub.list('pytorch/vision')  # models
-            raise ModuleNotFoundError(f"--model {opt.model} not found. Available models are: \n" + "\n".join(m))
-        finetune_net.output_new = nn.Sequential(nn.Linear(1000, 256),
-                                                nn.ReLU(),
-                                                nn.Linear(256, 120))
-    # Freeze
-    for param in finetune_net.features.parameters():
-        param.requires_grad = False
-    net = finetune_net.to(device)
+    pretrained = str(weights).endswith(".pt")
+    if pretrained:
+        # with torch_distributed_zero_first(LOCAL_RANK):
+        #     weights = attempt_download(weights)  # download if not found locally
+        ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
+        model = get_net(name=opt.model).to(device)  # create
+        exclude = []  # exclude keys
+        csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
+        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+        model.load_state_dict(csd, strict=False)  # load
+        LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
+    else:
+        model = get_net(opt).to(device)# create
+
+    # Freeze default = [1]
+    freeze = [f"model.{x}" for x in (freeze if len(freeze) > 1 else range(freeze[0]))]  # layers to freeze
+    for k, v in model.named_parameters():
+        v.requires_grad = True  # train all layers
+        if any(x in f"model.{k[0]}" for x in freeze):
+            LOGGER.info(f"freezing {k}")
+            v.requires_grad = False
+    # for param in model[0].parameters():
+    #     param.requires_grad = False
 
     # Info
     if RANK in {-1, 0}:
     #     # model.names = trainloader.dataset.classes  # attach class names
     #     # model.transforms = testloader.dataset.torch_transforms  # attach inference transforms
     #     # model_info(model)
-    #     # if opt.verbose:
-    #     # LOGGER.info(model)
-        images, labels = next(iter(trainloader))
-        writer = SummaryWriter(str(save_dir))
-        writer.add_images(
-            tag="train-image",
-            img_tensor=images[:16],
-            global_step=0,
-            dataformats="NCHW"
-        )
+        if opt.verbose:
+           LOGGER.info(model)
 
-#TODO 断点重训功能
     # Optimizer
-    optimizer = smart_optimizer(model=net,name=opt.optimizer,
+    optimizer = smart_optimizer(model=model,name=opt.optimizer,
                                 lr=opt.lr0,momentum=0.9,
                                 decay=opt.decay)
     # Scheduler
@@ -186,12 +192,18 @@ def train(opt,device):
     # scheduler = lr_scheduler.LambdaLR(optimizer, lr_lambda=lf) #余弦退火
     scheduler = torch.optim.lr_scheduler.StepLR(optimizer, opt.lr_period, opt.lr_decay)
 
+    # Resume #TODO 断点重训功能
+    best_fitness, start_epoch = 0.0, 0
+    if pretrained:
+        if resume:
+            best_fitness, start_epoch, epochs = smart_resume(ckpt, optimizer,None,weights, epochs, resume)
+        del ckpt, csd
+
     # Train
     t0 = time.time()
-    # criterion = smartCrossEntropyLoss(label_smoothing=opt.label_smoothing)  # loss function
+    scheduler.last_epoch = start_epoch-1
     criterion = nn.CrossEntropyLoss(reduction="none")
     best_fitness = 0.0
-    # scaler = amp.GradScaler(enabled=cuda)
     val = valid_dir.stem  # 'valid' or 'test'
     LOGGER.info(
         f'Image sizes {imgsz} train, {imgsz} test\n'
@@ -200,9 +212,9 @@ def train(opt,device):
         f'Starting {opt.model} training on {data} dataset with {nc} classes for {epochs} epochs...\n\n'
         f"{'Epoch':>10}{'GPU_mem':>10}{'train_loss':>12}{f'{val}_loss':>12}{'top1_acc':>12}{'top5_acc':>12}"
     )
-    for epoch in range(epochs):  # loop over the dataset multiple times
+    for epoch in range(start_epoch,epochs):  # loop over the dataset multiple times
         tloss, vloss, fitness = 0.0, 0.0, 0.0  # train loss, val loss, fitness
-        net.train()
+        model.train()
         pbar = enumerate(trainloader)
         if RANK in {-1, 0}:
             pbar = tqdm(enumerate(trainloader), total=len(trainloader), bar_format=TQDM_BAR_FORMAT)
@@ -211,13 +223,13 @@ def train(opt,device):
             optimizer.zero_grad()
 
             # Forward
-            l = criterion(net(images), labels).sum()
+            l = criterion(model(images), labels).sum()
 
             # Backward
             l.backward()
 
             # Optimize
-            torch.nn.utils.clip_grad_norm_(net.parameters(), max_norm=10.0)  # clip gradients
+            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=10.0)  # clip gradients
             optimizer.step()
 
             if RANK in {-1, 0}:
@@ -228,8 +240,8 @@ def train(opt,device):
                 # validate #
                 if i == len(pbar) - 1:  # last batch
                     top1, top5, vloss = validate.run(
-                        model=net, dataloader=validloader, criterion=criterion, pbar=pbar
-                    )  # test accuracy, loss
+                        model=model, dataloader=validloader, criterion=criterion, pbar=pbar
+                    )  if not is_train else [0.0]*3# test accuracy, loss
                     fitness = top1  # define fitness as top1 accuracy
 
         # Scheduler
@@ -260,18 +272,17 @@ def train(opt,device):
             for k ,v in metrics.items():
                 writer.add_scalar(tag=k,
                                   scalar_value=v,
-                                  global_step=epoch+1)
-
+                                  global_step=epoch)
             # Save model
             final_epoch = epoch + 1 == epochs
             if (not opt.nosave) or final_epoch:
                 ckpt = {
                     "epoch": epoch,
                     "best_fitness": best_fitness,
-                    "model": deepcopy(net).half(),  # deepcopy(de_parallel(model)).half(),
+                    "model": deepcopy(model).half(),  # deepcopy(de_parallel(model)).half(),
                     "ema": None,  # deepcopy(ema.ema).half(),
                     # "updates": ema.updates,
-                    "optimizer": None,  # optimizer.state_dict(),
+                    "optimizer": optimizer.state_dict(),
                     "opt": vars(opt),
                     # "git": GIT_INFO,  # {remote, branch, commit} if a git repo
                     "date": datetime.now().isoformat(),
@@ -281,6 +292,8 @@ def train(opt,device):
                 torch.save(ckpt, last)
                 if best_fitness == fitness:
                     torch.save(ckpt, best)
+                if opt.save_period > 0 and epoch % opt.save_period == 0:
+                    torch.save(ckpt, wdir / f"epoch{epoch}.pt")
                 del ckpt
 
     # Train complete
@@ -300,7 +313,7 @@ def train(opt,device):
         #需要去标准化
         from utils.augmentations import denormalize
 
-        pred = torch.max(net(images.to(device)), 1)[1]
+        pred = torch.max(model(images.to(device)), 1)[1]
         file = imshow_cls(images, labels, pred, names=TEXT_LABELS, verbose=False, f=save_dir / "validimages.jpg")
         # Log results
         meta = {"epochs": epochs, "top1_acc": best_fitness, "date": datetime.now().isoformat()}
@@ -315,17 +328,17 @@ def train(opt,device):
         writer.close()
         # logger.log_model(best, epochs, metadata=meta)
 
-
-
-
 def parse_opt(known=False):
     """Parses command line arguments for YOLOv5 training including model path, dataset, epochs, and more, returning
     parsed arguments.
     """
     parser = argparse.ArgumentParser()
     parser.add_argument("--model", type=str, default= "resnet34", help="initial weights path")
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test10/weights/last.pt",
+                        help="model.pt path(s)")
     parser.add_argument("--data", type=str, default="dog-breed-identification", help="kaggle_cifar10_tiny, kaggle_dog_tiny，banana-detection, VOCtrainval_11-May-2012, , ...")
     parser.add_argument("--epochs", type=int, default=10, help="total training epochs")
+    parser.add_argument("--resume", nargs="?", const=True, default=False, help="resume most recent training")
     parser.add_argument("--batch-size", type=int, default=32, help="total batch size for all GPUs")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="train, val image size (pixels)")
     parser.add_argument("--nosave", action="store_true", help="only save final checkpoint")
@@ -349,6 +362,8 @@ def parse_opt(known=False):
     parser.add_argument("--seed", type=int, default=0, help="Global training seed")
     parser.add_argument("--local-rank", type=int, default=-1, help="Automatic DDP Multi-GPU argument, do not modify")
     parser.add_argument("--is-train", default=False, help="")
+    parser.add_argument("--save-period", type=int, default=-1, help="Save checkpoint every x epochs (disabled if < 1)")
+    parser.add_argument("--freeze", nargs="+", type=int, default=[1], help="Freeze layers: backbone=10, first3=0 1 2")
     return parser.parse_known_args()[0] if known else parser.parse_args()
 
 def main(opt):

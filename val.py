@@ -44,11 +44,13 @@ from utils.general import (
     TEXT_LABELS,
     Profile,
     colorstr,
+    intersect_dicts,
     increment_path,
     print_args,
     save_to_csv,
 )
 from utils.torch_utils import select_device, smart_inference_mode
+from models.get_Net import get_net
 
 
 @smart_inference_mode()
@@ -88,12 +90,20 @@ def run(
         csv = save_dir/"results.csv"
 
         # Load model
-        model = nn.ModuleList()
-        file = Path(str(weights).strip().replace("'", ""))
-        ckpt = torch.load(file, map_location="cpu")  # load
-        ckpt = (ckpt["model"]).to(device).float()  # FP32 model
-        model.append(ckpt.eval())
-        model = model[-1]
+        # model = nn.ModuleList()
+        # file = Path(str(weights).strip().replace("'", ""))
+        # ckpt = torch.load(file, map_location="cpu")  # load
+        # ckpt = (ckpt["model"]).to(device).float()  # FP32 model
+        # model.append(ckpt.eval())
+        # model = model[-1]
+
+        ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
+        model = get_net(name="resnet34").to(device)  # create
+        exclude = []  # exclude keys
+        csd = ckpt["model"].float().state_dict()  # checkpoint state_dict as FP32
+        csd = intersect_dicts(csd, model.state_dict(), exclude=exclude)  # intersect
+        model.load_state_dict(csd, strict=False)  # load
+        LOGGER.info(f"Transferred {len(csd)}/{len(model.state_dict())} items from {weights}")  # report
 
         # Dataloader
         data = Path(data)#
@@ -179,8 +189,8 @@ def parse_opt():
     parser = argparse.ArgumentParser()
     parser.add_argument("--data", type=str, default=ROOT / "data/datasets/dog-breed-identification",
                         help="dataset path")
-
-    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34/weights/best.pt",
+    # parser.add_argument("--model", type=str, default="resnet34", help="initial weights path")
+    parser.add_argument("--weights", nargs="+", type=str, default=ROOT / "runs/train-cls/resnet34-resume-test6/weights/best.pt",
                         help="model.pt path(s)")
     parser.add_argument("--batch-size", type=int, default=64, help="batch size")
     parser.add_argument("--imgsz", "--img", "--img-size", type=int, default=224, help="inference size (pixels)")
