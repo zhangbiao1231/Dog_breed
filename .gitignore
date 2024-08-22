@@ -3,8 +3,8 @@ __pycache__/
 *.pyc
 *.so
 data/datasets/*
-data/images/*
 runs/*
+utils/tb_test.py
 
 # pytorch/python/numpy formats
 *.pth

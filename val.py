@@ -97,6 +97,7 @@ def run(
         # model.append(ckpt.eval())
         # model = model[-1]
 
+        # Load model
         ckpt = torch.load(weights, map_location="cpu")  # load checkpoint to CPU to avoid CUDA memory leak
         model = get_net(name="resnet34").to(device)  # create
         exclude = []  # exclude keys
